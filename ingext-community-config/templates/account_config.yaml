@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ingext-community-config
+  namespace: {{ .Release.Namespace }}
+data:
+  site_config.json: |
+    {
+      "account": "{{ .Values.account }}",
+      "siteURL": "https://{{ .Values.siteDomain }}",
+      "application":"Ingext",
+      "region":"{{ .Values.region }}",
+      "distro":"{{ .Values.distro }}",
+      "infrastructure":"{{ .Values.infrastructure }}",
+      "localQueue": true,
+      "services":[
+         {"name":"vm", "url":"http://vmsingle:8428"},
+         {"name":"elastic", "url":"http://opensearch-master:9200"},
+         {"name":"redis","url":"redis-master:6379"},
+         {"name":"platform","url":"http://platform-service:28180"},
+         {"name":"api-local","url":"http://api-local:28080"}
+       ]
+    }
+  etcd_config.json: |
+    {
+      "endpoints":[
+        "http://etcd:2379"
+      ]
+    }

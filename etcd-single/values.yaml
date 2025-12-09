@@ -1,0 +1,25 @@
+#This section builds out the service account more information can be found here: https://kubernetes.io/docs/concepts/security/service-accounts/
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Automatically mount a ServiceAccount's API credentials?
+  automount: true
+  # Annotations to add to the service account
+  annotations: {}
+
+service:
+  # This sets the service type more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
+  type: ClusterIP
+  clusterIP: None
+  # This sets the ports more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#field-spec-ports
+  #port: 80
+  ports: 
+  - name: "etcd-client"
+    port: 2379
+    targetPort: 2379
+  - name: "etcd-server"
+    port: 2380
+    targetPort: 2380
+  - name: "etcd-metrics"
+    port: 8080
+    targetPort: 8080

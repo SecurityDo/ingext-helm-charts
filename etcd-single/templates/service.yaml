@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: "etcd"
+  namespace: "ingext"
+spec:
+  clusterIP: {{ .Values.service.clusterIP }}
+  ports:
+    {{- range .Values.service.ports }}
+    - port: {{ .port }}
+      targetPort: {{ .targetPort }}
+      name: {{ .name }}
+    {{- end }}
+  selector:
+    "ingext.io/app": "etcd"

@@ -1,0 +1,2 @@
+schedule: "0 * * * *"
+command: "etcdctl defrag"

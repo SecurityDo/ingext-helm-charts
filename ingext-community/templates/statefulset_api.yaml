@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ .Release.Namespace }}-api
+spec:
+  ##
+  ## The service name is being set to leverage the service headlessly.
+  ## https://kubernetes.io/docs/concepts/services-networking/service/#headless-services
+  serviceName: api
+  ##
+  ## If you are increasing the replica count of an existing cluster, you should
+  ## also update the --initial-cluster-state flag as noted further down in the
+  ## container configuration.
+  replicas: 1
+  ##
+  ## This is label query over pods that should match the replica count.
+  ## It must match the pod template's labels. For more information, see the
+  ## following documentation:
+  ##   https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors
+  selector:
+    matchLabels:
+      "ingext.io/app": "{{ .Release.Namespace }}-api"
+  ##
+  ## Pod configuration template.
+  template:
+    metadata:
+      ##
+      ## The labeling here is tied to the "matchLabels" of this StatefulSet and
+      ## "affinity" configuration of the pod that will be created.
+      ##
+      ## This example's labeling scheme is fine for one etcd cluster per
+      ## namespace, but should you desire multiple clusters per namespace, you
+      ## will need to update the labeling schema to be unique per etcd cluster.
+      labels:
+        "ingext.io/app": "{{ .Release.Namespace }}-api"
+      annotations:
+        ##
+        ## This gets referenced in the etcd container's configuration as part of
+        ## the DNS name. It must match the service name created for the etcd
+        ## cluster. The choice to place it in an annotation instead of the env
+        ## settings is because there should only be 1 service per etcd cluster.
+        serviceName: api
+    spec:
+      serviceAccountName: {{ .Release.Namespace }}-sa
+      ## Containers in the pod
+      volumes:
+      - name: config-volume
+        configMap:
+          name: ingext-community-config
+      initContainers:
+      - name: "dbip-lite-sidecar"
+        image: "public.ecr.aws/ingext/dbip-lite:latest"
+        volumeMounts:
+        - name: "geoip-db"
+          mountPath: "/data"
+      containers:
+      ## This example only has this etcd container.
+      - name: "ingext-remote"
+        image: "public.ecr.aws/ingext/ingext_remote:latest"
+        imagePullPolicy: Always
+        ports:
+        - name: ingext-api
+          containerPort: 8002
+        - name: api-local
+          containerPort: 28080          
+        env:
+        - name: ETCDCTL_API
+          value: "3"
+        - name:  ETCDCTL_ENDPOINTS
+          value: "http://etcd:2379"
+        volumeMounts:
+        - name: config-volume
+          mountPath: "/etc/config"
+        - name: "geoip-db"
+          mountPath: "/usr/local/share/db-ip"
+        - name: ingext-remote-data
+          mountPath: "/data"  
+  ##
+  ## This StatefulSet will uses the volumeClaimTemplate field to create a PVC in
+  ## the cluster for each replica. These PVCs can not be easily resized later.
+  volumeClaimTemplates:
+  - metadata:
+      name: geoip-db
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      ##
+      ## In some clusters, it is necessary to explicitly set the storage class.
+      ## This example will end up using the default storage class.
+      ## storageClassName: "manual"
+      resources:
+        requests:
+          storage: 3Gi
+  - metadata:
+      name: ingext-remote-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      ##
+      ## In some clusters, it is necessary to explicitly set the storage class.
+      ## This example will end up using the default storage class.
+      ## storageClassName: "manual"
+      resources:
+        requests:
+          storage: 10Gi
+  persistentVolumeClaimRetentionPolicy: 
+    whenDeleted: Retain
+    whenScaled: Retain  

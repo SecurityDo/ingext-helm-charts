@@ -1,0 +1,14 @@
+# values.yaml
+
+siteDomain: "ingext.aks.ingext.io"
+
+ingress:
+  enabled: true
+  className: "azure-application-gateway"
+  
+  # This matches the ClusterIssuer name we created in Phase 1
+  certIssuer: "letsencrypt-prod" 
+  
+  # The name of the secret where the cert will be stored after generation
+  tlsSecretName: "ingext-tls-secret"
+

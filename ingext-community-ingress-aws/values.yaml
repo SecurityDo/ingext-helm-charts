@@ -1,0 +1,6 @@
+
+siteDomain: "ingext.k8.ingext.io"
+certArn: 
+loadBalancerName: "alb-ingext-community-ingress"  
+loadBalancerGroupName: "ingext-community"
+

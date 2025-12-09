@@ -1,0 +1,252 @@
+# ---------------------------------------------------------
+# Redis Configuration
+# ---------------------------------------------------------
+redis:
+  architecture: standalone
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: true
+      size: 2Gi
+
+# ---------------------------------------------------------
+# VictoriaMetrics Configuration
+# ---------------------------------------------------------
+victoria-metrics-single:
+  server:
+    fullnameOverride: vmsingle
+
+# ---------------------------------------------------------
+# OpenSearch Configuration
+# (Content derived from opensearch_single_values.yaml)
+# ---------------------------------------------------------
+opensearch:
+  clusterName: "opensearch"
+  nodeGroup: "master"
+
+  # If discovery.type in the opensearch configuration is set to "single-node",
+  # this should be set to "true". If "true", replicas will be forced to 1.
+  singleNode: true
+
+  masterService: "opensearch-master"
+
+  roles:
+    - master
+    - ingest
+    - data
+    - remote_cluster_client
+
+  # Note: The chart logic will force this to 1 because singleNode is set to true
+  replicas: 3
+
+  majorVersion: ""
+
+  global:
+    dockerRegistry: ""
+
+  opensearchHome: /usr/share/opensearch
+
+  config:
+    opensearch.yml: |
+      cluster.name: opensearch
+      plugins.security.disabled: true
+      # Bind to all interfaces because we don't know what IP address Docker will assign to us.
+      network.host: 0.0.0.0
+
+  extraEnvs: 
+    - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
+      value: "admin"
+
+  envFrom: []
+  secretMounts: []
+  hostAliases: []
+
+  image:
+    repository: "opensearchproject/opensearch"
+    tag: ""
+    pullPolicy: "IfNotPresent"
+
+  podAnnotations: {}
+  openSearchAnnotations: {}
+  labels: {}
+
+  opensearchJavaOpts: "-Xmx512M -Xms512M"
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "100Mi"
+
+  initResources: {}
+  sidecarResources: {}
+
+  networkHost: "0.0.0.0"
+
+  rbac:
+    create: false
+    serviceAccountAnnotations: {}
+    serviceAccountName: ""
+    automountServiceAccountToken: false
+
+  podSecurityPolicy:
+    create: false
+    name: ""
+    spec:
+      privileged: true
+      fsGroup:
+        rule: RunAsAny
+      runAsUser:
+        rule: RunAsAny
+      seLinux:
+        rule: RunAsAny
+      supplementalGroups:
+        rule: RunAsAny
+      volumes:
+        - secret
+        - configMap
+        - persistentVolumeClaim
+        - emptyDir
+
+  persistence:
+    enabled: true
+    enableInitChown: true
+    labels:
+      enabled: false
+      additionalLabels: {}
+    accessModes:
+      - ReadWriteOnce
+    size: 8Gi
+    annotations: {}
+
+  extraVolumes: []
+  extraVolumeMounts: []
+  extraContainers: []
+  extraInitContainers: []
+
+  priorityClassName: ""
+  antiAffinityTopologyKey: "kubernetes.io/hostname"
+  antiAffinity: "soft"
+  customAntiAffinity: {}
+  nodeAffinity: {}
+  podAffinity: {}
+  topologySpreadConstraints: []
+  podManagementPolicy: "Parallel"
+  enableServiceLinks: true
+
+  protocol: https
+  httpPort: 9200
+  transportPort: 9300
+  metricsPort: 9600
+  httpHostPort: ""
+  transportHostPort: ""
+
+  service:
+    labels: {}
+    labelsHeadless: {}
+    headless:
+      annotations: {}
+    type: ClusterIP
+    nodePort: ""
+    annotations: {}
+    httpPortName: http
+    transportPortName: transport
+    metricsPortName: metrics
+    loadBalancerIP: ""
+    loadBalancerSourceRanges: []
+    externalTrafficPolicy: ""
+
+  updateStrategy: RollingUpdate
+  maxUnavailable: 1
+
+  podSecurityContext:
+    fsGroup: 1000
+    runAsUser: 1000
+
+  securityContext:
+    capabilities:
+      drop:
+        - ALL
+    runAsNonRoot: true
+    runAsUser: 1000
+
+  securityConfig:
+    enabled: false
+    path: "/usr/share/opensearch/config/opensearch-security"
+    actionGroupsSecret:
+    configSecret:
+    internalUsersSecret:
+    rolesSecret:
+    rolesMappingSecret:
+    tenantsSecret:
+    config:
+      securityConfigSecret: ""
+      dataComplete: true
+      data: {}
+
+  terminationGracePeriod: 120
+  sysctlVmMaxMapCount: 262144
+
+  startupProbe:
+    tcpSocket:
+      port: 9200
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 30
+
+  livenessProbe: {}
+
+  readinessProbe:
+    tcpSocket:
+      port: 9200
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  schedulerName: ""
+  imagePullSecrets: []
+  nodeSelector: {}
+  tolerations: []
+
+  ingress:
+    enabled: false
+    annotations: {}
+    ingressLabels: {}
+    path: /
+    hosts:
+      - chart-example.local
+    tls: []
+
+  nameOverride: ""
+  fullnameOverride: ""
+  masterTerminationFix: false
+
+  opensearchLifecycle: {}
+  lifecycle: {}
+  keystore: []
+
+  networkPolicy:
+    create: false
+    http:
+      enabled: false
+
+  fsGroup: ""
+
+  sysctl:
+    enabled: false
+
+  sysctlInit:
+    enabled: false
+
+  plugins:
+    enabled: false
+    installList: []
+
+  extraObjects: []
+
+  serviceMonitor:
+    enabled: false
+    path: /_prometheus/metrics
+    interval: 10s
+    labels: {}

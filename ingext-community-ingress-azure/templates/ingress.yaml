@@ -1,0 +1,59 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: "{{ .Release.Namespace }}-ingress"
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # --- AGIC SETTINGS ---
+    # "kubernetes.io/ingress.class": "azure/application-gateway"
+    "appgw.ingress.kubernetes.io/ssl-redirect": "true"
+    "appgw.ingress.kubernetes.io/backend-protocol": "http"
+    "appgw.ingress.kubernetes.io/health-probe-path": "/health-check"
+    
+    # --- CERT-MANAGER SETTINGS ---
+    # This triggers cert-manager to talk to Let's Encrypt
+    "cert-manager.io/cluster-issuer": "{{ .Values.ingress.certIssuer }}"
+    
+    # Optional: If you encounter 502 errors during the challenge, 
+    # sometimes increasing the timeout helps AGIC update routes in time.
+    "appgw.ingress.kubernetes.io/request-timeout": "60"
+
+spec:
+  ingressClassName: "{{ .Values.ingress.className }}"
+  tls:
+  - hosts:
+    - {{ .Values.siteDomain }}
+    # Cert-manager will generate this secret automatically.
+    # You do NOT need to create it manually.
+    secretName: {{ .Values.ingress.tlsSecretName }}
+  rules:
+  - host: {{ .Values.siteDomain }}
+    http:
+      paths:
+      - backend:
+          service:
+            name: "{{ .Release.Namespace }}-api"
+            port:
+              number: 8002
+        path: "/api"
+        pathType: Prefix      
+  - host: {{ .Values.siteDomain }}
+    http:
+      paths:
+      - backend:
+          service:
+            name: "platform-service"
+            port:
+              number: 28180
+        path: "/services"
+        pathType: Prefix
+  - host: {{ .Values.siteDomain }}
+    http:
+      paths:
+      - backend:
+          service:
+            name: "{{ .Release.Namespace }}-fluency7"
+            port:
+              number: 8004
+        path: "/"
+        pathType: Prefix
