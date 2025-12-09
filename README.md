@@ -10,6 +10,97 @@ Before deploying, ensure you have the following installed and configured:
   * **Helm 3+:** Installed and configured on your local machine.
   * **kubectl:** Configured to communicate with your cluster.
   * **Cloud CLI:** (Optional) AWS CLI or Azure CLI if deploying to specific clouds.
+-----
+
+## Prepare K8s cluster:
+
+### 1\. AWS EKS
+
+Create one EKS cluster with eksctl: 
+Expected Time: This process typically takes 15–20 minutes to complete.
+
+```bash
+eksctl create cluster \
+  --name ingext-test-cluster \
+  --profile your-aws-profile-name \
+  --region us-east-1 \
+  --version 1.34 \
+  --nodegroup-name standard-workers \
+  --node-type t3.large \
+  --nodes 2 \
+  --nodes-min 1 \
+  --nodes-max 3 \
+  --managed
+```
+
+Save the cluster context for kubectl
+
+```bash
+aws eks update-kubeconfig --region us-east-1 --name ingext-test-cluster
+```
+
+Configure service account for the AWS load balancer controller:
+
+```bash
+eksctl utils associate-iam-oidc-provider \
+    --profile your-aws-profile-name \
+    --region us-east-1 \
+    --cluster ingext-test-cluster \
+    --approve
+
+aws iam create-policy \
+    --profile demo \
+    --policy-name AWSLoadBalancerControllerIAMPolicy \
+    --policy-document file://iam_policy.json
+
+
+eksctl create iamserviceaccount \
+  --cluster=ingext-test-cluster \
+  --namespace=kube-system \
+  --name=aws-load-balancer-controller \
+  --role-name "AmazonEKSLoadBalancerControllerRoleIngext" \
+  --attach-policy-arn=arn:aws:iam::509304988160:policy/AWSLoadBalancerControllerIAMPolicy \
+  --approve
+```
+
+Finally, install the controller into the kube-system namespace
+
+```bash
+# 1. Add the EKS Helm repo
+helm repo add eks https://aws.github.io/eks-charts
+helm repo update
+
+# 2. Install the chart
+helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
+  -n kube-system \
+  --set clusterName=ingext-test-cluster \
+  --set serviceAccount.create=false \
+  --set serviceAccount.name=aws-load-balancer-controller
+```
+
+### 2\. Azure Cloud (AKS)
+
+```bash
+# Login to Azure
+az login
+
+# Create Resource Group
+az group create --name my-test-rg --location eastus
+
+# Create AKS Cluster with App Gateway enabled
+az aks create \
+  --resource-group my-test-rg \
+  --name my-test-cluster \
+  --node-count 2 \
+  --generate-ssh-keys \
+  --network-plugin azure \
+  --enable-addons ingress-appgw \
+  --appgw-name my-test-agw \
+  --appgw-subnet-cidr "10.225.0.0/16"
+
+# Get Credentials
+az aks get-credentials --resource-group my-test-rg --name my-test-cluster
+```
 
 -----
 
@@ -93,33 +184,7 @@ Setup one DNS CNAME from the site domain to the DNS name of the load balancer.
 
 ### Option B: Azure Cloud (AKS)
 
-Use this option to set up a new AKS cluster with App Gateway and install the necessary ingress controllers.
-
-#### Step 1: Create Cluster & Gateway
-
-```bash
-# Login to Azure
-az login
-
-# Create Resource Group
-az group create --name my-test-rg --location eastus
-
-# Create AKS Cluster with App Gateway enabled
-az aks create \
-  --resource-group my-test-rg \
-  --name my-test-cluster \
-  --node-count 2 \
-  --generate-ssh-keys \
-  --network-plugin azure \
-  --enable-addons ingress-appgw \
-  --appgw-name my-test-agw \
-  --appgw-subnet-cidr "10.225.0.0/16"
-
-# Get Credentials
-az aks get-credentials --resource-group my-test-rg --name my-test-cluster
-```
-
-#### Step 2: Install Cert Manager
+#### Step 1: Install Cert Manager
 
 Cert-manager is required for handling certificates on Azure.
 
@@ -133,7 +198,7 @@ helm install cert-manager jetstack/cert-manager \
   --set installCRDs=true
 ```
 
-#### Step 3: Install Ingress & Cert Issuer
+#### Step 2: Install Ingress & Cert Issuer
 
 ```bash
 # Install Cert Issuer
@@ -145,7 +210,7 @@ helm install ingext-community-ingress-azure oci://public.ecr.aws/ingext/ingext-c
   --set siteDomain=ingext.k8.ingext.io
 ```
 
-#### Step 4: Setup DNS
+#### Step 3: Setup DNS
 
 ```bash
 kubectl get ingress  -n ingext
