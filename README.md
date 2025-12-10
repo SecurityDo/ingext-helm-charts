@@ -202,7 +202,9 @@ helm install cert-manager jetstack/cert-manager \
 
 ```bash
 # Install Cert Issuer
-helm install ingext-community-certissuer oci://public.ecr.aws/ingext/ingext-community-certissuer -n ingext
+helm install ingext-community-certissuer oci://public.ecr.aws/ingext/ingext-community-certissuer \
+  -n ingext \
+  --set email="<your-email-address>"
 
 # Install Azure Ingress
 helm install ingext-community-ingress-azure oci://public.ecr.aws/ingext/ingext-community-ingress-azure \
