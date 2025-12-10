@@ -8,7 +8,7 @@ spec:
     server: https://acme-v02.api.letsencrypt.org/directory
     email: {{ .Values.email }}  # <--- REPLACE THIS with your real email
     privateKeySecretRef:
-      name: {{ .Values.certIssuer | default "letsencrypt-prod" }}
+      name: {{ .Values.tlsSecretName | default "ingext-tls-secret" }}
     solvers:
     - http01:
         ingress:
