@@ -7,7 +7,7 @@ appVersion: "1.0.0"
 
 dependencies:
   - name: redis
-    version: 21.2.10
+    version: 24.0.7
     repository: https://charts.bitnami.com/bitnami
     
   - name: opensearch
