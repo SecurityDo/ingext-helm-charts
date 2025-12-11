@@ -229,6 +229,28 @@ password: ingext
 
 -----
 
+## 4\. Cleanup resources after test
+
+### AWS EKS:
+
+```bash
+# remove eks cluster
+eksctl delete cluster --name <cluster-name>
+# remove the assocated dns record
+```
+
+### Azure AKS:
+
+```bash
+# remove the cluster
+az aks delete --resource-group <resource-group> --name <cluster-name>
+# remove the resource group
+az group delete --name <resource-group>
+# remove the assocated dns record
+```
+
+-----
+
 ## Support
 
 If you encounter issues during installation, please open an issue in this repository.
