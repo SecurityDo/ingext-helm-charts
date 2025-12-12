@@ -131,6 +131,21 @@ helm install etcd-single oci://public.ecr.aws/ingext/etcd-single -n ingext
 helm install etcd-single-cronjob oci://public.ecr.aws/ingext/etcd-single-cronjob -n ingext
 ```
 
+### Check pod status
+
+Make sure all pods are "running"
+
+```bash
+$ kubectl get pods -n ingext
+
+# expected output
+NAME                          READY   STATUS    RESTARTS   AGE
+etcd-0                        1/1     Running   0          53s
+ingext-stack-redis-master-0   1/1     Running   0          62s
+opensearch-master-0           0/1     Running   0          62s
+vmsingle-0                    1/1     Running   0          62s
+```
+
 ### Configure and Deploy Application
 
 Deploy the configuration, initialization jobs, and the main application logic.
@@ -150,6 +165,15 @@ helm install ingext-community-init oci://public.ecr.aws/ingext/ingext-community-
 helm install ingext-community oci://public.ecr.aws/ingext/ingext-community -n ingext
 ```
 
+### Check service logs
+
+```bash
+# view api service logs
+kubectl logs -n ingext -f ingext-api-0
+# view platform service logs
+kubectl logs -n ingext -f ingext-platform-0
+```
+
 -----
 
 ## 2\. Ingress & Cloud Configuration
@@ -162,7 +186,7 @@ Use this option if you are running on Amazon Elastic Kubernetes Service.
 
 **Requirements:**
 
-  * You must have a valid ACM Certificate ARN.
+* You must have a valid ACM Certificate ARN.
 
 <!-- end list -->
 
@@ -231,7 +255,7 @@ password: ingext
 
 ## 4\. Cleanup resources after test
 
-### AWS EKS:
+### AWS EKS
 
 ```bash
 # remove eks cluster
@@ -239,7 +263,7 @@ eksctl delete cluster --name <cluster-name>
 # remove the assocated dns record
 ```
 
-### Azure AKS:
+### Azure AKS
 
 ```bash
 # remove the cluster
