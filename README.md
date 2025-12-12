@@ -6,17 +6,18 @@ Welcome to the **ingext-community** repository. This project provides the Helm c
 
 Before deploying, ensure you have the following installed and configured:
 
-  * **Kubernetes Cluster:** A running cluster (AWS EKS, Azure AKS, or similar).
-  * **Helm 3+:** Installed and configured on your local machine.
-  * **kubectl:** Configured to communicate with your cluster.
-  * **Cloud CLI:** (Optional) AWS CLI or Azure CLI if deploying to specific clouds.
+* **Kubernetes Cluster:** A running cluster (AWS EKS, Azure AKS, or similar).
+* **Helm 3+:** Installed and configured on your local machine.
+* **kubectl:** Configured to communicate with your cluster.
+* **Cloud CLI:** (Optional) AWS CLI or Azure CLI if deploying to specific clouds.
+
 -----
 
-## Prepare K8s cluster:
+## Prepare K8s cluster
 
 ### 1\. AWS EKS
 
-Create one EKS cluster with eksctl: 
+Create one EKS cluster with eksctl
 Expected Time: This process typically takes 15–20 minutes to complete.
 
 ```bash
