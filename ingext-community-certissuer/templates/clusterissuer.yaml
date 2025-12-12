@@ -1,15 +1,15 @@
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
-  name: {{ .Values.certIssuer | default "letsencrypt-prod" }}
+  name: letsencrypt-prod
 spec:
   acme:
     # The Let's Encrypt Production Server
     server: https://acme-v02.api.letsencrypt.org/directory
     email: {{ .Values.email }}  # <--- REPLACE THIS with your real email
     privateKeySecretRef:
-      name: {{ .Values.tlsSecretName | default "ingext-tls-secret" }}
+      name: letsencrypt-prod-account-key
     solvers:
     - http01:
         ingress:
-          class: azure-application-gateway
+          ingressClassName: azure-application-gateway
