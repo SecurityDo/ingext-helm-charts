@@ -1,7 +1,5 @@
 #!/bin/bash
 
-# --- Configuration ---
-# Updated to your ECR Public repository
 IMAGE_NAME="public.ecr.aws/ingext/ingext-shell:latest"
 
 # --- Pre-flight Checks ---
@@ -11,6 +9,7 @@ mkdir -p "$HOME/.kube"
 mkdir -p "$HOME/.aws"
 mkdir -p "$HOME/.azure"
 mkdir -p "$HOME/.ssh"
+mkdir -p "$HOME/.helm"
 
 # --- Run Container ---
 echo "🚀 Launching Multi-Cloud Toolbox from: $IMAGE_NAME"
@@ -25,6 +24,7 @@ docker run -it --rm --pull always \
   -v "$HOME/.kube:/root/.kube" \
   -v "$HOME/.aws:/root/.aws" \
   -v "$HOME/.azure:/root/.azure" \
+  -v "$HOME/.helm:/root/.helm" \
   -v "$HOME/.ssh:/root/.ssh:ro" \
   -w /workspace \
   "$IMAGE_NAME"
