@@ -91,7 +91,7 @@ az group create --name my-test-rg --location eastus
 # Create AKS Cluster with App Gateway enabled
 az aks create \
   --resource-group my-test-rg \
-  --name my-test-cluster \
+  --name my-test-cluster --location eastus \
   --node-count 2 \
   --generate-ssh-keys \
   --network-plugin azure \
@@ -134,7 +134,7 @@ helm install etcd-single-cronjob oci://public.ecr.aws/ingext/etcd-single-cronjob
 
 ### Check pod status
 
-Make sure all pods are "running"
+Make sure all pods are "running" and ready
 
 ```bash
 $ kubectl get pods -n ingext
@@ -143,7 +143,7 @@ $ kubectl get pods -n ingext
 NAME                          READY   STATUS    RESTARTS   AGE
 etcd-0                        1/1     Running   0          53s
 ingext-stack-redis-master-0   1/1     Running   0          62s
-opensearch-master-0           0/1     Running   0          62s
+opensearch-master-0           1/1     Running   0          62s
 vmsingle-0                    1/1     Running   0          62s
 ```
 
@@ -244,6 +244,12 @@ kubectl get ingress  -n ingext
 ```
 
 Setup one DNS A-record from the site domain to the public IP address associated with the gateway.
+Check the Challenge status:
+
+```bash
+kubectl describe challenge -n ingext
+# No resources found in ingext namespace (if the challenge is resolved successfully)
+```
 
 -----
 
