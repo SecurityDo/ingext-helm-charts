@@ -11,6 +11,8 @@ Before deploying, ensure you have the following installed and configured:
 * **kubectl:** Configured to communicate with your cluster.
 * **Cloud CLI:** (Optional) AWS CLI or Azure CLI if deploying to specific clouds.
 
+OR run ingext cloud toolbox from a docker image. [Install from ingext cloud toolbox](install.md)
+
 -----
 
 ## Prepare K8s cluster

@@ -15,22 +15,22 @@ We provide wrapper scripts to launch the environment effortlessly. These scripts
 
 ### 🍎 macOS & 🐧 Linux
 
-1.  Download the `ops-shell.sh` script to your project directory.
+1.  Download the `ingext-shell.sh` script to your project directory.
 2.  Make the script executable:
     ```bash
-    chmod +x ops-shell.sh
+    chmod +x ingext-shell.sh
     ```
 3.  Run the shell:
     ```bash
-    ./ops-shell.sh
+    ./ingext-shell.sh
     ```
 
 ### 🪟 Windows (PowerShell)
 
-1.  Download the `ops-shell.ps1` script to your project directory.
+1.  Download the `ingext-shell.ps1` script to your project directory.
 2.  Run the script in PowerShell:
     ```powershell
-    .\ops-shell.ps1
+    .\ingext-shell.ps1
     ```
     *(Note: If you receive a security error, you may need to run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` to allow the script to run).*
 
@@ -52,7 +52,7 @@ Even though the tools run inside Docker, **your data persists on your laptop.** 
 | `~/.ssh/` | `/root/.ssh` | **Read-only** access to your SSH keys. |
 
 ### Example Workflow
-1. Run `./ops-shell.sh`.
+1. Run `./ingext-shell.sh`.
 2. You see the welcome message:
    ```text
    🛠️  Multi-Cloud K8s Toolbox Ready
