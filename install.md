@@ -24,6 +24,11 @@ We provide wrapper scripts to launch the environment effortlessly. These scripts
     ```bash
     ./ingext-shell.sh
     ```
+4. OR run the scipit in one line
+    ```bash
+    bash <(curl -fsSL https://raw.githubusercontent.com/SecurityDo/ingext-helm-charts/main/ingext-shell.sh)
+    ```
+5. If it asks for a password, run 'docker logout public.ecr.aws' first."
 
 ### 🪟 Windows (PowerShell)
 
