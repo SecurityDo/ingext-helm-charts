@@ -52,7 +52,7 @@ eksctl utils associate-iam-oidc-provider \
     --approve
 
 aws iam create-policy \
-    --profile demo \
+    --profile your-aws-profile-name \
     --policy-name AWSLoadBalancerControllerIAMPolicy \
     --policy-document file://iam_policy.json
 
