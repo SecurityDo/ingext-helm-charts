@@ -8,6 +8,9 @@ if (-not (Test-Path "$HomeDir\.azure")) { New-Item -ItemType Directory -Path "$H
 if (-not (Test-Path "$HomeDir\.ssh"))   { New-Item -ItemType Directory -Path "$HomeDir\.ssh" | Out-Null }
 if (-not (Test-Path "$HomeDir\.helm"))  { New-Item -ItemType Directory -Path "$HomeDir\.helm" | Out-Null } # <--- Added
 
+# 1. Create the history file if it doesn't exist
+if (-not (Test-Path "$HomeDir\.ingext_shell_history")) { New-Item -ItemType File -Path "$HomeDir\.ingext_shell_history" | Out-Null }
+
 Write-Host "🚀 Launching Multi-Cloud Toolbox from: $ImageName" -ForegroundColor Cyan
 
 docker run -it --rm --pull always `
@@ -16,6 +19,7 @@ docker run -it --rm --pull always `
   -v "${HomeDir}\.aws:/root/.aws" `
   -v "${HomeDir}\.azure:/root/.azure" `
   -v "${HomeDir}\.helm:/root/.helm" `
+  -v "${HomeDir}\.ingext_shell_history:/root/.bash_history" `
   -v "${HomeDir}\.ssh:/root/.ssh:ro" `
   -w "/workspace" `
   $ImageName
