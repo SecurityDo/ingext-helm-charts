@@ -37,7 +37,7 @@ We provide wrapper scripts to launch the environment effortlessly. These scripts
     ```powershell
     .\ingext-shell.ps1
     ```
-    *(Note: If you receive a security error, you may need to run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` to allow the script to run).*
+    *(Note: If you receive a security error, you may need to run `Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Scope CurrentUser` to allow the script to run).*
 
 ---
 
