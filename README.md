@@ -43,52 +43,45 @@ eksctl create cluster \
 aws eks update-kubeconfig --region us-east-1 --name ingext-test-cluster
 ```
 
-#### Associate OIDC Provider
+#### Install the Pod Identity Agent Add-on
 
-The EBS CSI driver needs to interact with AWS APIs (to create/delete volumes). To allow Kubernetes to do this securely, you must enable the OIDC provider for your cluster.
-
-```bash
-eksctl utils associate-iam-oidc-provider \
-  --cluster ingext-test-cluster \
-  --region us-east-1 \
-  --profile your-aws-profile-name \
-  --approve
-```
-
-#### Create IAM Service Account for the ebs csi controller
-
-Next, create a Kubernetes Service Account that has the necessary AWS permissions attached. This command creates an IAM role with the `AmazonEBSCSIDriverPolicy` and associates it with the service account `ebs-csi-controller-sa` in your cluster.
-
-```bash
-eksctl create iamserviceaccount \
-  --name ebs-csi-controller-sa \
-  --namespace kube-system \
-  --cluster ingext-test-cluster \
-  --region us-east-1 \
-  --attach-policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy \
-  --approve \
-  --role-only \
-  --role-name AmazonEKS_EBS_CSI_DriverRole_community \
-  --profile our-aws-profile-name
-```
-
-> **Note:** I used `--role-only` here because the Add-on installation in the next step will technically create the Service Account object in Kubernetes for you. This step ensures the **IAM Role** exists and is ready to be attached.
-
-#### Install the EBS CSI Driver Add-on
-
-Now, install the actual Add-on and tell it to use the IAM role you just created.
+Run the following command to install the agent.
 
 ```bash
 eksctl create addon \
-  --name aws-ebs-csi-driver \
   --cluster ingext-test-cluster \
+  --name eks-pod-identity-agent \
   --region us-east-1 \
-  --service-account-role-arn arn:aws:iam::$(aws sts get-caller-identity --profile our-aws-profile-name --query Account --output text):role/AmazonEKS_EBS_CSI_DriverRole \
-  --force \
-  --profile our-aws-profile-name
+  --profile your-aws-profile-name
 ```
 
-*(Note: The command above dynamically fetches your Account ID to construct the ARN. If that fails, simply replace `$(aws ...)` with your actual 12-digit AWS Account ID).*
+#### Create the Pod Identity Association for the ebs csi controller
+
+This command creates an IAM role with the AmazonEBSCSIDriverPolicy and associates it with the ebs-csi-controller-sa service account in your cluster.
+
+```bash
+eksctl create podidentityassociation \
+  --cluster ingext-test-cluster \
+  --namespace kube-system \
+  --service-account-name ebs-csi-controller-sa \
+  --role-name AmazonEKS_EBS_CSI_DriverRole \
+  --permission-policy-arns arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy \
+  --region us-east-1
+```
+
+> **Note:** To use an existing IAM role for the service account, use  `--role-arn  <roleARN>`, remove `--role-name` and `--permission-policy-arns` flags.
+
+#### Install the EBS CSI Driver Add-on
+
+Now that the permissions are set up, you can install the driver itself.
+
+```bash
+eksctl create addon \
+  --cluster ingext-test-cluster \
+  --name aws-ebs-csi-driver \
+  --region us-east-1 \
+  --profile your-aws-profile-name
+```
 
 #### Verification
 
@@ -107,22 +100,23 @@ helm install ingext-aws-gp3 oci://public.ecr.aws/ingext/ingext-aws-gp3
 #### Configure service account for the AWS load balancer controller
 
 ```bash
+curl -O https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/main/docs/install/iam_policy.json
+
 aws iam create-policy \
     --profile your-aws-profile-name \
     --policy-name AWSLoadBalancerControllerIAMPolicy \
     --policy-document file://iam_policy.json
 
-
-eksctl create iamserviceaccount \
-  --cluster=ingext-test-cluster \
-  --namespace=kube-system \
-  --name=aws-load-balancer-controller \
-  --role-name "AmazonEKSLoadBalancerControllerRoleIngext" \
-  --attach-policy-arn=arn:aws:iam::509304988160:policy/AWSLoadBalancerControllerIAMPolicy \
-  --approve
+eksctl create podidentityassociation \
+  --cluster ingext-test-cluster \
+  --namespace kube-system \
+  --service-account-name aws-load-balancer-controller \
+  --role-name AWSLoadBalancerControllerRole \
+  --permission-policy-arns arn:aws:iam::$(aws sts get-caller-identity --profile your-aws-profile-name --query Account --output text):policy/AWSLoadBalancerControllerIAMPolicy \
+  --region us-east-1
 ```
 
-Finally, install the controller into the kube-system namespace
+#### Install the controller into the kube-system namespace
 
 ```bash
 # 1. Add the EKS Helm repo
@@ -133,8 +127,18 @@ helm repo update
 helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
   -n kube-system \
   --set clusterName=ingext-test-cluster \
-  --set serviceAccount.create=false \
-  --set serviceAccount.name=aws-load-balancer-controller
+  --set serviceAccount.create=true \
+  --set serviceAccount.name=aws-load-balancer-controller \
+  --set region=us-east-1 \
+  --set vpcId=$(aws eks describe-cluster --name ingext-test-cluster --region us-east-1 --query "cluster.resourcesVpcConfig.vpcId" --output text --profile your-aws-profile-name)
+```
+
+#### Verify Installation
+
+Wait about 30-60 seconds, then check if the controller pods are running:
+
+```bash
+kubectl get deployment -n kube-system aws-load-balancer-controller
 ```
 
 ### 2\. Azure Cloud (AKS)
