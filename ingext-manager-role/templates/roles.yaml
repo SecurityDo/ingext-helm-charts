@@ -2,7 +2,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ .Values.serviceAccountName }}-manager-role
+  name: {{ include "mychart.serviceAccountName" . }}-manager-role
   namespace: {{ .Release.Namespace }}
 rules:
 - apiGroups: [""]
@@ -21,13 +21,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ .Values.serviceAccountName }}-manager-binding
+  name: {{ include "mychart.serviceAccountName" . }}-manager-binding
   namespace: {{ .Release.Namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ .Values.serviceAccountName }}-manager-role
+  name: {{ include "mychart.serviceAccountName" . }}-manager-role
 subjects:
 - namespace: {{ .Release.Namespace }}
   kind: ServiceAccount
-  name: {{ .Values.serviceAccountName }}
+  name: {{ include "mychart.serviceAccountName" . }}
