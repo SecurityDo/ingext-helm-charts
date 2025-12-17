@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: lake-worker
+  labels:
+    "ingext.io/app": "worker"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      "ingext.io/app": "worker"
+
+  ## Pod configuration template.
+  template:
+    metadata:
+      labels:
+        "ingext.io/app": "worker"
+    spec:
+      serviceAccountName: {{ .Release.Namespace }}-sa
+      ##
+      ## Containers in the pod
+      volumes:
+        - name: lake-config-volume
+          configMap:
+            name: ingext-lake-config
+        - name: config-volume
+          configMap:
+            name: ingext-community-config
+        - name: lake-volume
+          persistentVolumeClaim:
+            claimName: s3-lake-{{ .Release.Namespace }}
+        - name: "tmpfs-data"
+          emptyDir: 
+            medium: Memory
+            sizeLimit: 100Mi                    
+      containers:
+      ## This example only has this etcd container.
+      - name: lake-worker
+        image: public.ecr.aws/ingext/ingext_lake_worker:{{ .Values.version }}
+        imagePullPolicy: Always
+        resources:
+          requests:
+            cpu: "0.2"
+            memory: 1500Mi
+          limits:
+            cpu: "0.3"
+            memory: 1600Mi
+        env:
+          - name: POD_ID
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: ETCDCTL_API
+            value: "3"
+          - name:  ETCDCTL_ENDPOINTS
+            value: "http://etcd:2379"    
+        ##
+        ## This is the mount configuration.
+        volumeMounts:
+          - name: config-volume
+            mountPath: "/etc/config"
+          - name: lake-volume
+            mountPath: /lake            
+          - name: "tmpfs-data"
+            mountPath: /data  
+          - name: lake-config-volume
+            mountPath: "/etc/lake/config"

@@ -1,0 +1,20 @@
+#namespace: etcd
+accessModes:
+  - ReadWriteMany
+
+storage: 2000Gi
+
+bucket:
+  region:
+  name: 
+
+#shareVolumeName: s3-lake-pv
+#This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
+
+#sharedPrefix: ""
+
+#sharedStorage: 2000Gi
+#shareAccessModes:
+#  - ReadOnlyMany
+#shareVolumeHandle: s3-csi-driver-shared-volume
+driver: s3.csi.aws.com

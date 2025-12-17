@@ -1,0 +1,5 @@
+#clusterName: ingextrc1
+#siteDomain: lake.k8.ingext.io
+#certArn: arn:aws:acm:us-east-2:509304988160:certificate/9fcdb2cd-ed03-4833-8a53-cf946dbfc8d9
+version: latest
+lakeWorkerVersion: latest

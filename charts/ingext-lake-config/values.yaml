@@ -1,0 +1,7 @@
+
+storageType: s3
+s3:
+  bucket:
+  region:
+blob:
+  storageAccount:  

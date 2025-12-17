@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: lake-mgr
+spec:
+  ##
+  ## The service name is being set to leverage the service headlessly.
+  ## https://kubernetes.io/docs/concepts/services-networking/service/#headless-services
+  serviceName: lake-mgr
+  ##
+  ## If you are increasing the replica count of an existing cluster, you should
+  ## also update the --initial-cluster-state flag as noted further down in the
+  ## container configuration.
+  replicas: 1
+  ##
+  ## For initialization, the etcd pods must be available to eachother before
+  ## they are "ready" for traffic. The "Parallel" policy makes this possible.
+  podManagementPolicy: Parallel
+  ##
+  ## To ensure availability of the etcd cluster, the rolling update strategy
+  ## is used. For availability, there must be at least 51% of the etcd nodes
+  ## online at any given time.
+  updateStrategy:
+    type: RollingUpdate
+  ##
+  ## This is label query over pods that should match the replica count.
+  ## It must match the pod template's labels. For more information, see the
+  ## following documentation:
+  ##   https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors
+  selector:
+    matchLabels:
+      "ingext.io/app": "lake-mgr"
+  ##
+  ## Pod configuration template.
+  template:
+    metadata:
+      ##
+      ## The labeling here is tied to the "matchLabels" of this StatefulSet and
+      ## "affinity" configuration of the pod that will be created.
+      ##
+      ## This example's labeling scheme is fine for one etcd cluster per
+      ## namespace, but should you desire multiple clusters per namespace, you
+      ## will need to update the labeling schema to be unique per etcd cluster.
+      labels:
+        "ingext.io/app": "lake-mgr"
+      annotations:
+        ##
+        ## This gets referenced in the etcd container's configuration as part of
+        ## the DNS name. It must match the service name created for the etcd
+        ## cluster. The choice to place it in an annotation instead of the env
+        ## settings is because there should only be 1 service per etcd cluster.
+        serviceName: lake-mgr
+    spec:
+      serviceAccountName: {{ .Release.Namespace }}-sa
+      ##
+      ## Containers in the pod
+      volumes:
+        - name: config-volume
+          configMap:
+            name: ingext-community-config
+        - name: lake-config-volume
+          configMap:
+            name: ingext-lake-config            
+        - name: lake-volume
+          persistentVolumeClaim:
+            claimName: s3-lake-{{ .Release.Namespace }}
+      containers:
+      ## This example only has this etcd container.
+      - name: lake-mgr
+        image: public.ecr.aws/ingext/ingext_lake_mgr:{{ .Values.version }}
+        imagePullPolicy: Always
+        ports:
+        - name: datalake-api
+          containerPort: 19010
+        env:
+          - name: WORKER_VERSION
+            value: {{ .Values.lakeWorkerVersion }}
+          - name: POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP      
+          - name: HOSTNAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: ETCDCTL_API
+            value: "3"
+          - name:  ETCDCTL_ENDPOINTS
+            value: "http://etcd:2379"
+        ##
+        ## This is the mount configuration.
+        volumeMounts:
+          - name: lake-master-data
+            mountPath: /data
+          - name: lake-volume
+            mountPath: /lake      
+          - name: config-volume
+            mountPath: "/etc/config"
+          - name: lake-config-volume
+            mountPath: "/etc/lake/config"      
+
+  ##
+  ## This StatefulSet will uses the volumeClaimTemplate field to create a PVC in
+  ## the cluster for each replica. These PVCs can not be easily resized later.
+  volumeClaimTemplates:
+  - metadata:
+      name: lake-master-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      ##
+      ## In some clusters, it is necessary to explicitly set the storage class.
+      ## This example will end up using the default storage class.
+      ## storageClassName: "manual"
+      resources:
+        requests:
+          storage: 5Gi
+  persistentVolumeClaimRetentionPolicy: 
+    whenDeleted: Retain
+    whenScaled: Retain  
