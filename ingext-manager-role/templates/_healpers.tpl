@@ -2,6 +2,6 @@
 {{- if .Values.serviceAccountName -}}
 {{- .Values.serviceAccountName -}}
 {{- else -}}
-{{- printf "%s_sa" .Release.Namespace -}}
+{{- printf "%s-sa" .Release.Namespace -}}
 {{- end -}}
 {{- end -}}
