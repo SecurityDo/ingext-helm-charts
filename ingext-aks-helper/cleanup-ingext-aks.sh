@@ -183,6 +183,20 @@ if [[ "$SKIP_CLUSTER_DELETE" == "0" ]]; then
   }
 fi
 
+# -------- Get DNS information before cleanup --------
+ING_IP=""
+ING_DOMAIN=""
+if kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
+  # Try to get ingress IP and domain before uninstalling
+  ING_IP=$(kubectl get ingress -n "$NAMESPACE" -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+  ING_DOMAIN=$(kubectl get ingress -n "$NAMESPACE" -o jsonpath='{.items[0].spec.rules[0].host}' 2>/dev/null || true)
+  
+  # If domain not found in ingress, try from env file
+  if [[ -z "$ING_DOMAIN" ]] && [[ -n "${SITE_DOMAIN:-}" ]]; then
+    ING_DOMAIN="$SITE_DOMAIN"
+  fi
+fi
+
 # -------- Uninstall Helm releases --------
 if kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
   log "Uninstalling Helm releases in namespace '$NAMESPACE'"
@@ -263,6 +277,27 @@ echo "=========================================="
 echo "Cleanup Complete!"
 echo "=========================================="
 echo ""
+
+# -------- DNS Removal Reminder --------
+if [[ -n "$ING_DOMAIN" ]] || [[ -n "$ING_IP" ]]; then
+  echo "=========================================="
+  echo "IMPORTANT: Remove DNS Record"
+  echo "=========================================="
+  echo ""
+  if [[ -n "$ING_DOMAIN" ]] && [[ -n "$ING_IP" ]]; then
+    echo "Remove the DNS A-record you created:"
+    echo "  Domain: $ING_DOMAIN"
+    echo "  IP:     $ING_IP"
+    echo ""
+    echo "Delete the A-record: $ING_DOMAIN -> $ING_IP"
+  elif [[ -n "$ING_DOMAIN" ]]; then
+    echo "Remove the DNS A-record for domain: $ING_DOMAIN"
+  elif [[ -n "$ING_IP" ]]; then
+    echo "Remove the DNS A-record pointing to IP: $ING_IP"
+  fi
+  echo ""
+fi
+
 echo "Note: AKS cluster and resource group deletions may take several minutes"
 echo "to complete. You can check status with:"
 echo "  az aks show --resource-group $RESOURCE_GROUP --name $CLUSTER_NAME"
