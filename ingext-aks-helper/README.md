@@ -17,15 +17,40 @@ All scripts follow the official installation instructions from the [ingext-helm-
 
 Before using these scripts, ensure you have:
 
-- **Azure CLI** (`az`) - [Installation guide](https://docs.microsoft.com/cli/azure/install-azure-cli)
-- **kubectl** - [Installation guide](https://kubernetes.io/docs/tasks/tools/)
-- **helm** - [Installation guide](https://helm.sh/docs/intro/install/)
-- **Azure account** with permissions to create AKS clusters and resource groups
-- **DNS domain** that you can configure (for ingress)
+- **Docker** installed and running ([Download Docker Desktop](https://www.docker.com/products/docker-desktop))
+- **Azure subscription** - The preflight script will help verify this and guide you if there are issues
+- **DNS control** for a domain (for ingress and TLS)
+
+**Note:** All required tools (`az`, `kubectl`, `helm`) are pre-installed in the Docker container. You don't need to install them separately.
+
+The helper scripts are designed to run inside the Docker container provided by `ingext-shell.sh`, which includes all necessary tools and ensures consistent versions.
 
 ## Quick Start
 
-### 0. Preflight Check (Recommended)
+### Step 0: Launch the Docker Container
+
+The helper scripts run inside a pre-configured Docker container that includes all necessary tools.
+
+**Start the container:**
+
+```bash
+# From the ingext-helm-charts repository root
+./ingext-shell.sh
+```
+
+This will:
+* Pull the latest container image
+* Mount your current directory to `/workspace`
+* Preserve your Azure credentials and kubectl config
+* Drop you into a bash prompt inside the container
+
+**Navigate to the helper scripts:**
+
+```bash
+cd /workspace/ingext-aks-helper
+```
+
+### Step 1: Preflight Check (Recommended)
 
 Run the interactive wizard to collect settings and verify prerequisites:
 
@@ -36,34 +61,34 @@ chmod +x preflight-azure.sh
 ```
 
 This will:
-- Prompt for all required settings (region, resource group, cluster name, domain, email)
-- Check Azure authentication and subscription
-- Verify provider registrations
-- Check DNS resolution status
-- Generate an environment file (`ingext-aks.env`) with your settings
+- **Help with Azure setup** - If you're not logged in, it will prompt you to login
+- **Verify your subscription** - Checks if you have a valid Azure subscription
+- **Check provider registrations** - Verifies Microsoft.ContainerService and Microsoft.Network
+- **Guide you through issues** - Provides clear guidance if there are problems
+- **Prompt for all required settings** - Region, resource group, cluster name, domain, email
+- **Show available VM sizes** - Automatically displays VM sizes available in your region
+- **Check DNS resolution status** - Verifies your domain setup
+- **Generate environment file** - Creates `ingext-aks.env` with all your settings
 
 **Note:** A template file (`ingext-aks.env.example`) is provided as a reference. You can also manually edit and source it if you prefer not to use the interactive wizard.
 
-Then source the env file and run the installer:
+### Step 2: Install Ingext
+
+Source the env file and run the installer (no arguments needed):
 
 ```bash
 source ./ingext-aks.env
 
-./install-ingext-aks.sh \
-  --location "$LOCATION" \
-  --resource-group "$RESOURCE_GROUP" \
-  --cluster-name "$CLUSTER_NAME" \
-  --domain "$SITE_DOMAIN" \
-  --email "$CERT_EMAIL"
+./install-ingext-aks.sh
 ```
 
-### 1. Install Ingext (Direct)
+The installer will automatically use the environment variables from the `.env` file.
 
-Alternatively, run the installer directly with all arguments:
+**Alternative: Install with explicit arguments**
+
+If you prefer not to use the `.env` file, you can pass arguments directly:
 
 ```bash
-chmod +x install-ingext-aks.sh
-
 ./install-ingext-aks.sh \
   --location eastus \
   --resource-group ingext-rg \
@@ -72,14 +97,14 @@ chmod +x install-ingext-aks.sh
   --email admin@example.com
 ```
 
-The installer will:
-1. Create an AKS cluster with App Gateway add-on
-2. Install all dependencies (Redis, OpenSearch, VictoriaMetrics, etcd)
-3. Deploy Ingext components
-4. Set up cert-manager and ingress
-5. Display the ingress public IP for DNS configuration
+**What the installer does:**
+1. Creates an AKS cluster with App Gateway add-on
+2. Installs all dependencies (Redis, OpenSearch, VictoriaMetrics, etcd)
+3. Deploys Ingext components
+4. Sets up cert-manager and ingress
+5. Displays the ingress public IP for DNS configuration
 
-### 2. Check Installation Status
+### Step 3: Check Installation Status
 
 ```bash
 chmod +x status-ingext-aks.sh
@@ -87,7 +112,7 @@ chmod +x status-ingext-aks.sh
 ./status-ingext-aks.sh --namespace ingext
 ```
 
-### 3. Configure DNS
+### Step 4: Configure DNS
 
 ```bash
 chmod +x dns-ingext-aks.sh
@@ -99,14 +124,14 @@ chmod +x dns-ingext-aks.sh
 ./dns-ingext-aks.sh --domain ingext.example.com --wait
 ```
 
-### 4. Access Ingext
+### Step 5: Access Ingext
 
 After DNS is configured and the certificate is issued:
 - URL: `https://ingext.example.com`
 - Username: `admin@ingext.io`
 - Password: `ingext`
 
-### 5. Cleanup (when done)
+### Step 6: Cleanup (when done)
 
 ```bash
 chmod +x cleanup-ingext-aks.sh
@@ -123,13 +148,14 @@ chmod +x cleanup-ingext-aks.sh
 Interactive wizard that collects all required settings and performs best-effort checks before installation.
 
 **What it does:**
-- Prompts for all installation settings (region, resource group, cluster name, domain, email)
-- Verifies Azure authentication and subscription
-- Checks provider registrations (Microsoft.ContainerService, Microsoft.Network)
-- Checks compute quota in the selected region
-- Checks DNS resolution status (if domain already exists)
-- Asks readiness questions (billing, permissions, quota, DNS control)
-- Generates an environment file (`ingext-aks.env`) with all settings
+- **Helps with Azure setup** - Prompts for login if needed, allows subscription selection
+- **Verifies Azure authentication and subscription** - Checks current subscription and allows switching
+- **Checks provider registrations** - Verifies Microsoft.ContainerService and Microsoft.Network
+- **Shows available VM sizes** - Automatically displays VM sizes for your region
+- **Checks compute quota** - Shows quota snapshot for the selected region
+- **Checks DNS resolution status** - Verifies domain setup (if domain already exists)
+- **Asks readiness questions** - Billing, permissions, quota, DNS control
+- **Generates environment file** - Creates `ingext-aks.env` with all settings
 
 **Usage:**
 ```bash
@@ -143,13 +169,10 @@ OUTPUT_ENV=./my-custom.env ./preflight-azure.sh
 Creates an environment file (default: `./ingext-aks.env`) that you can source:
 ```bash
 source ./ingext-aks.env
-./install-ingext-aks.sh \
-  --location "$LOCATION" \
-  --resource-group "$RESOURCE_GROUP" \
-  --cluster-name "$CLUSTER_NAME" \
-  --domain "$SITE_DOMAIN" \
-  --email "$CERT_EMAIL"
+./install-ingext-aks.sh
 ```
+
+The installer will automatically use the environment variables from the `.env` file.
 
 **Benefits:**
 - Catches common issues before installation starts
@@ -171,6 +194,7 @@ Installs Ingext on AKS following the complete installation flow.
 **Optional Arguments:**
 - `--namespace` - Kubernetes namespace (default: `ingext`)
 - `--node-count` - AKS node count (default: `2`)
+- `--node-vm-size` - AKS node VM size (default: `standard_dc2ds_v3`)
 - `--skip-aks-create` - Skip AKS creation (use existing cluster)
 
 **Example:**
@@ -253,6 +277,44 @@ Helps configure and verify DNS for your Ingext installation.
 - Monitors certificate challenge status
 - Optional wait mode for automation
 
+### `check-providers.sh` - Provider Registration Checker
+
+Quick utility to check Azure provider registration status.
+
+**Usage:**
+```bash
+./check-providers.sh
+```
+
+**What it shows:**
+- Current subscription
+- Microsoft.ContainerService registration status
+- Microsoft.Network registration status
+- Registration commands if needed
+
+**Features:**
+- Color-coded output (green/yellow/red)
+- Clear error messages if subscription issues
+- Suggests registration commands if providers aren't registered
+
+### `list-vm-sizes.sh` - VM Size Helper
+
+Lists VM sizes available in a region, filtered to show AKS-compatible sizes.
+
+**Usage:**
+```bash
+./list-vm-sizes.sh --location eastus
+./list-vm-sizes.sh --all  # Show all sizes (not filtered)
+```
+
+**What it shows:**
+- Filtered list of AKS-compatible VM sizes (Standard_D*, Standard_B* series)
+- Excludes specialized sizes (GPU, HPC, etc.)
+- Recommendations for common use cases
+- Shows vCPU, memory, and disk counts
+
+**Note:** This shows general VM availability. AKS has additional restrictions. If a size fails during installation, the installer will show the actual AKS-available sizes.
+
 ### `cleanup-ingext-aks.sh` - Cleanup Script
 
 Removes Ingext installation and optionally deletes the AKS cluster and resource group.
@@ -264,6 +326,15 @@ Removes Ingext installation and optionally deletes the AKS cluster and resource 
 **Optional Arguments:**
 - `--namespace` - Kubernetes namespace (default: `ingext`)
 - `--keep-resource-group` - Keep resource group after cleanup
+- `--env-file` - Path to environment file (default: `./ingext-aks.env`)
+
+**Auto-loads from .env file:**
+The script automatically loads `./ingext-aks.env` if it exists, so you can simply run:
+```bash
+./cleanup-ingext-aks.sh
+```
+
+No need to provide `--resource-group` and `--cluster-name` if the `.env` file is present.
 
 **Example:**
 ```bash
@@ -280,38 +351,45 @@ Removes Ingext installation and optionally deletes the AKS cluster and resource 
 ```
 
 **What it does:**
-1. Uninstalls all Helm releases in the namespace
-2. Uninstalls cert-manager
-3. Deletes the AKS cluster
-4. Optionally deletes the resource group
+1. Automatically loads settings from `ingext-aks.env` if available
+2. Uninstalls all Helm releases in the namespace
+3. Uninstalls cert-manager
+4. Deletes the AKS cluster
+5. Optionally deletes the resource group
+
+**Note:** The cleanup script automatically loads from `./ingext-aks.env` if it exists, so you can simply run:
+```bash
+./cleanup-ingext-aks.sh
+```
+
+If the `.env` file is present, you don't need to provide `--resource-group` and `--cluster-name` arguments.
 
 ## Common Workflows
 
 ### Fresh Installation
 
 ```bash
-# 0. Preflight check (recommended)
+# 0. Launch Docker container (if not already running)
+./ingext-shell.sh
+cd /workspace/ingext-aks-helper
+
+# 1. Preflight check (recommended)
 ./preflight-azure.sh
 source ./ingext-aks.env
 
-# 1. Install
-./install-ingext-aks.sh \
-  --location "$LOCATION" \
-  --resource-group "$RESOURCE_GROUP" \
-  --cluster-name "$CLUSTER_NAME" \
-  --domain "$SITE_DOMAIN" \
-  --email "$CERT_EMAIL"
+# 2. Install (uses .env file automatically)
+./install-ingext-aks.sh
 
-# 2. Check status
+# 3. Check status
 ./status-ingext-aks.sh --namespace "$NAMESPACE"
 
-# 3. Configure DNS (get instructions)
+# 4. Configure DNS (get instructions)
 ./dns-ingext-aks.sh --domain "$SITE_DOMAIN" --namespace "$NAMESPACE"
 
-# 4. Wait for DNS (after creating DNS record)
+# 5. Wait for DNS (after creating DNS record)
 ./dns-ingext-aks.sh --domain "$SITE_DOMAIN" --namespace "$NAMESPACE" --wait
 
-# 5. Verify everything is working
+# 6. Verify everything is working
 ./status-ingext-aks.sh --namespace "$NAMESPACE"
 ```
 
@@ -359,13 +437,21 @@ kubectl get ingress -n ingext -o wide
 - **Solution:** Check Azure permissions and quota limits
 - **Alternative:** Use `--skip-aks-create` if cluster already exists
 
+**Problem:** VM size not available for AKS
+- **Solution:** The installer will show actual available sizes in the error message
+- **Fix:** Use one of the sizes from the error message: `./install-ingext-aks.sh --node-vm-size <size-from-error>`
+- **Check:** Run `./list-vm-sizes.sh` to see general availability (note: AKS has additional restrictions)
+- **Common sizes:** `standard_dc2ds_v3`, `standard_dc2s_v3`, `standard_dc4ds_v3`
+
 **Problem:** Pods stuck in Pending
 - **Solution:** Check node resources: `kubectl describe nodes`
 - **Check:** Node count may be insufficient
+- **Check:** VM size may be too small for workloads
 
 **Problem:** Helm install fails
 - **Solution:** Ensure you're logged in to Azure: `az login`
 - **Check:** Verify kubectl context: `kubectl config current-context`
+- **Check:** Verify provider registrations: `./check-providers.sh`
 
 ### DNS Issues
 
@@ -401,6 +487,7 @@ All scripts support environment variables as alternatives to command-line argume
 | `CERT_EMAIL` | Certificate email | `admin@example.com` |
 | `NAMESPACE` | Kubernetes namespace | `ingext` |
 | `NODE_COUNT` | AKS node count | `2` |
+| `NODE_VM_SIZE` | AKS node VM size | `standard_dc2ds_v3` |
 
 **Note:** The preflight wizard (`./preflight-azure.sh`) will generate a complete `ingext-aks.env` file with all required variables. You can also manually copy and edit `ingext-aks.env.example` if you prefer.
 
