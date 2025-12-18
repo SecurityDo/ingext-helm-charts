@@ -384,6 +384,8 @@ kubectl describe challenge -n ingext
 user: <admin@ingext.io>
 password: ingext
 
+> **Next Steps:** After logging in, see the [Ingext Quick Start Guide](https://ingext.readme.io/docs/quick-start-guide) to create your first streaming pipe and start processing data.
+
 -----
 
 ## 4\. Cleanup resources after test
@@ -424,6 +426,19 @@ az aks delete --resource-group <resource-group> --name <cluster-name>
 az group delete --name <resource-group>
 # remove the associated dns record
 ```
+
+-----
+
+## Documentation
+
+For detailed guides on using Ingext after installation, including:
+
+* Quick Start Guide - Creating your first streaming pipe
+* Setting up data sources, processors, and sinks
+* Fluency Processing Language documentation
+* Creating parsers and dashboards
+
+Visit the [Ingext Documentation](https://ingext.readme.io/docs/quick-start-guide).
 
 -----
 
