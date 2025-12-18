@@ -143,6 +143,53 @@ kubectl get deployment -n kube-system aws-load-balancer-controller
 
 ### 2\. Azure Cloud (AKS)
 
+#### Recommended: Use Helper Scripts
+
+The easiest way to deploy Ingext on Azure AKS is using the helper scripts in the `ingext-aks-helper` directory. These scripts automate the entire process and include preflight checks, installation, status monitoring, and cleanup.
+
+> **Important:** The `install-ingext-aks.sh` script covers the complete installation process, including:
+> * AKS cluster creation
+> * All dependencies (Redis, OpenSearch, VictoriaMetrics, etcd) - see [Core Installation](#1-core-installation) section below
+> * Application deployment (configuration, initialization, main services)
+> * Ingress and TLS setup (cert-manager, certificate issuer, Application Gateway ingress)
+>
+> If you use the helper scripts, you can skip the [Core Installation](#1-core-installation) and [Ingress & Cloud Configuration](#2-ingress--cloud-configuration) sections below and proceed directly to [Step 3: Login to the management console](#3-login-to-the-management-console-https-sitedomain) after configuring DNS.
+
+**Prerequisites:**
+* **Docker** installed and running
+* **Azure subscription** with billing enabled
+* **DNS control** for a domain (for ingress and TLS)
+
+**Quick Start:**
+
+```bash
+# 1. Launch the Docker container (includes all tools: az, kubectl, helm)
+./ingext-shell.sh
+
+# 2. Navigate to helper scripts
+cd /workspace/ingext-aks-helper
+
+# 3. Run preflight wizard (interactive setup and prerequisite checking)
+chmod +x preflight-azure.sh
+./preflight-azure.sh
+
+# 4. Install Ingext (uses settings from preflight)
+source ./ingext-aks.env
+./install-ingext-aks.sh
+
+# 5. Check installation status
+./status-ingext-aks.sh --namespace ingext
+
+# 6. Configure DNS
+./dns-ingext-aks.sh --domain <your-domain>
+```
+
+For detailed instructions, see [HOWTO-AZURE.md](ingext-aks-helper/HOWTO-AZURE.md) or the [ingext-aks-helper README](ingext-aks-helper/README.md).
+
+#### Manual Installation (Alternative)
+
+If you prefer to install manually without the helper scripts:
+
 ```bash
 # Login to Azure
 az login
@@ -271,6 +318,8 @@ Setup one DNS CNAME from the site domain to the DNS name of the load balancer.
 
 ### Option B: Azure Cloud (AKS)
 
+> **Note:** If you used the helper scripts (`install-ingext-aks.sh`), ingress and certificates are already configured. Skip to Step 3 to configure DNS.
+
 #### Step 1: Install Cert Manager
 
 Cert-manager is required for handling certificates on Azure.
@@ -301,12 +350,27 @@ helm install ingext-community-ingress-azure oci://public.ecr.aws/ingext/ingext-c
 
 #### Step 3: Setup DNS
 
+**Using Helper Scripts:**
+
 ```bash
-kubectl get ingress  -n ingext
+# Get DNS instructions and verify status
+cd /workspace/ingext-aks-helper
+./dns-ingext-aks.sh --domain ingext.k8.ingext.io
+
+# Wait for DNS to be configured (after creating the DNS record)
+./dns-ingext-aks.sh --domain ingext.k8.ingext.io --wait
+```
+
+**Manual DNS Setup:**
+
+```bash
+# Get the ingress public IP
+kubectl get ingress -n ingext
 ```
 
 Setup one DNS A-record from the site domain to the public IP address associated with the gateway.
-Check the Challenge status:
+
+**Check the Challenge status:**
 
 ```bash
 kubectl describe challenge -n ingext
@@ -334,12 +398,31 @@ eksctl delete cluster --name <cluster-name>
 
 ### Azure AKS
 
+#### Using Helper Scripts (Recommended)
+
+If you used the helper scripts for installation, use the cleanup script:
+
+```bash
+# From inside the Docker container (./ingext-shell.sh)
+cd /workspace/ingext-aks-helper
+
+# Cleanup (automatically loads from ingext-aks.env if available)
+./cleanup-ingext-aks.sh
+
+# Or with explicit arguments
+./cleanup-ingext-aks.sh \
+  --resource-group <resource-group> \
+  --cluster-name <cluster-name>
+```
+
+#### Manual Cleanup
+
 ```bash
 # remove the cluster
 az aks delete --resource-group <resource-group> --name <cluster-name>
 # remove the resource group
 az group delete --name <resource-group>
-# remove the assocated dns record
+# remove the associated dns record
 ```
 
 -----
