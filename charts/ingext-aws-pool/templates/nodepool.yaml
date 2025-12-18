@@ -1,0 +1,25 @@
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: {{ .Values.poolName }}
+spec:
+  template:
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: {{ .Values.poolName }}
+      requirements:
+        - key: "karpenter.sh/capacity-type"
+          operator: In
+          values: {{ .Values.capacityType | toJson }}
+        - key: "node.kubernetes.io/instance-type"
+          operator: In
+          values: {{ .Values.instanceType | toJson }}
+      taints:
+        - key: node-pool
+          value: {{ .Values.poolName }}
+          effect: NoSchedule
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 10s

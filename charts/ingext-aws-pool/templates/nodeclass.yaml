@@ -1,0 +1,19 @@
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: {{ .Values.poolName }}
+spec:
+  # The role defaults to the naming convention provided if nodeRoleName is empty
+  role: {{ default (printf "KarpenterNodeRole-%s" .Values.clusterName) .Values.nodeRoleName }}
+  
+  # Selection for subnets and security groups based on discovery tags
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: {{ .Values.clusterName }}
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: {{ .Values.clusterName }}
+  
+  # AMI selection as requested
+  amiSelectorTerms:
+    {{- toYaml .Values.amiSelectorTerms | nindent 4 }}

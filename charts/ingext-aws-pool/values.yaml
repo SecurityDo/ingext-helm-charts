@@ -1,0 +1,16 @@
+clusterName:
+poolName:
+# Defaults to KarpenterNodeRole-{{ .Values.clusterName }}
+nodeRoleName:
+
+# AMI Configuration
+amiSelectorTerms:
+  - alias: "bottlerocket@latest"
+
+# Instance Configuration
+instanceType: 
+  - "m5.large"
+
+capacityType: 
+  - "spot"
+  - "on-demand"
