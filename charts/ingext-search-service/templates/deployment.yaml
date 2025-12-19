@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: search-service
+  labels:
+    "ingext.io/app": "search-service"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      "ingext.io/app": "search-service"
+
+  ## Pod configuration template.
+  template:
+    metadata:
+      labels:
+        "ingext.io/app": "search-service"
+    spec:
+      serviceAccountName: {{ .Release.Namespace }}-sa
+      ##
+      ## Containers in the pod
+      volumes:
+        - name: lake-config-volume
+          configMap:
+            name: ingext-lake-config
+        - name: config-volume
+          configMap:
+            name: ingext-community-config
+        - name: lake-volume
+          persistentVolumeClaim:
+            claimName: s3-lake-{{ .Release.Namespace }}
+      containers:
+      ## This example only has this etcd container.
+      - name: search-service
+        image: public.ecr.aws/ingext/ingext_search_service:{{ .Values.version }}
+        imagePullPolicy: Always
+        ports:
+          - name: search-service
+            containerPort: 19100
+        resources:
+          requests:
+            cpu: "0.2"
+            memory: 200Mi
+          limits:
+            cpu: "0.3"
+            memory: 300Mi
+        env:
+          - name: SEARCH_VERSION
+            value: {{ .Values.lakeSearchVersion }}
+          - name: POD_ID
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: ETCDCTL_API
+            value: "3"
+          - name:  ETCDCTL_ENDPOINTS
+            value: "http://etcd:2379"    
+        ##
+        ## This is the mount configuration.
+        volumeMounts:
+          - name: config-volume
+            mountPath: "/etc/config"
+          - name: lake-volume
+            mountPath: /lake            
+          - name: lake-config-volume
+            mountPath: "/etc/lake/config"
