@@ -4,6 +4,9 @@ metadata:
   name: {{ .Values.poolName }}
 spec:
   template:
+    metadata:
+      labels:
+        node-pool: {{ .Values.poolName }}
     spec:
       nodeClassRef:
         group: karpenter.k8s.aws
