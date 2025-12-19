@@ -11,4 +11,4 @@ spec:
       targetPort: 28180
       name: platform
   selector:
-    "ingext.io/app": "{{ .Release.Namespace }}-platform"
+    "ingext.io/app": "platform"

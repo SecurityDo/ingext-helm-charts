@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   namespace: {{ .Release.Namespace }}
-  name: {{ .Release.Namespace }}-platform
+  name: platform
 spec:
   ##
   ## The service name is being set to leverage the service headlessly.
@@ -20,7 +20,7 @@ spec:
   ##   https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors
   selector:
     matchLabels:
-      "ingext.io/app": "{{ .Release.Namespace }}-platform"
+      "ingext.io/app": "platform"
   ##
   ## Pod configuration template.
   template:
@@ -33,7 +33,7 @@ spec:
       ## namespace, but should you desire multiple clusters per namespace, you
       ## will need to update the labeling schema to be unique per etcd cluster.
       labels:
-        "ingext.io/app": "{{ .Release.Namespace }}-platform"
+        "ingext.io/app": "platform"
       annotations:
         ##
         ## This gets referenced in the etcd container's configuration as part of

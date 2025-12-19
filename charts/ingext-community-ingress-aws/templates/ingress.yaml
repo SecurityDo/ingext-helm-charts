@@ -31,7 +31,7 @@ spec:
       paths:
       - backend:
           service:
-            name: "{{ .Release.Namespace }}-api"
+            name: "api"
             port:
               number: 8002
         path: "/api"
@@ -51,7 +51,7 @@ spec:
       paths:
       - backend:
           service:
-            name: "{{ .Release.Namespace }}-fluency7"
+            name: "fluency7"
             port:
               number: 8004
         path: "/"

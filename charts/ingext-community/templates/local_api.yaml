@@ -11,4 +11,4 @@ spec:
       targetPort: 28080
       name: api-local
   selector:
-    "ingext.io/app": "{{ .Release.Namespace }}-api"
+    "ingext.io/app": "api"

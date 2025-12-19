@@ -1,19 +1,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Release.Namespace }}-fluency7
+  name: fluency7
   namespace: {{ .Release.Namespace }}
   labels:
-    "ingext.io/app": "{{ .Release.Namespace }}-fluency7"
+    "ingext.io/app": "fluency7"
 spec:
   replicas: 1
   selector:
     matchLabels:
-      "ingext.io/app": "{{ .Release.Namespace }}-fluency7"
+      "ingext.io/app": "fluency7"
   template:
     metadata:
       labels:
-        "ingext.io/app": "{{ .Release.Namespace }}-fluency7"
+        "ingext.io/app": "fluency7"
     spec:
       # serviceAccountName: {{ .Release.Namespace }}-sa
       containers:
