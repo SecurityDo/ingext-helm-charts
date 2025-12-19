@@ -22,6 +22,7 @@ metadata:
       ## SSL Settings
     "alb.ingress.kubernetes.io/listen-ports": "[{\"HTTPS\":443}]"
     "alb.ingress.kubernetes.io/certificate-arn": "{{ .Values.certArn}}"
+    "alb.ingress.kubernetes.io/load-balancer-attributes": "idle_timeout.timeout_seconds=600"
 
 spec:
   ingressClassName:  "alb"
