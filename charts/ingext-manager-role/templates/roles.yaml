@@ -6,7 +6,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
 rules:
 - apiGroups: [""]
-  resources: ["pods", "pods/log", "persistentvolumeclaims", "configmaps", "secrets"]
+  resources: ["services", "pods", "pods/log", "persistentvolumeclaims"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
 - apiGroups: ["apps"]
   resources: ["deployments"]
@@ -18,8 +18,11 @@ rules:
   resources: ["jobs", "cronjobs"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]  
 - apiGroups: [""]
-  resources: ["configmaps"]
+  resources: ["configmaps", "secrets"]
   verbs: ["get", "watch", "list"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
