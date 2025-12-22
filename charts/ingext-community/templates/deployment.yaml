@@ -1,24 +1,24 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: fluency7
+  name: fluency8
   namespace: {{ .Release.Namespace }}
   labels:
-    "ingext.io/app": "fluency7"
+    "ingext.io/app": "fluency8"
 spec:
   replicas: 1
   selector:
     matchLabels:
-      "ingext.io/app": "fluency7"
+      "ingext.io/app": "fluency8"
   template:
     metadata:
       labels:
-        "ingext.io/app": "fluency7"
+        "ingext.io/app": "fluency8"
     spec:
       # serviceAccountName: {{ .Release.Namespace }}-sa
       containers:
-        - name: fluency7
-          image: "public.ecr.aws/ingext/fluency7:latest"
+        - name: fluency8
+          image: "public.ecr.aws/ingext/fluency8:latest"
           imagePullPolicy: Always
           ports:
             - name: http

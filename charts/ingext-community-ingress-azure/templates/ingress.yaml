@@ -46,7 +46,7 @@ spec:
         pathType: Prefix
       - backend:
           service:
-            name: "fluency7"
+            name: "fluency8"
             port:
               number: 8004
         path: "/"
