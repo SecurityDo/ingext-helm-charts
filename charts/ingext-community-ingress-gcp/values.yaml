@@ -1,0 +1,17 @@
+# values.yaml
+
+siteDomain: "ingext.gke.ingext.io"
+
+ingress:
+  enabled: true
+  className: "gce"
+  
+  # Static IP name for GKE Ingress (created by installer)
+  staticIpName: ""
+  
+  # This matches the ClusterIssuer name we created in Phase 1
+  certIssuer: "letsencrypt-prod" 
+  
+  # The name of the secret where the cert will be stored after generation
+  tlsSecretName: "ingext-tls-secret"
+

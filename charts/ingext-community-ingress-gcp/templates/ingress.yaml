@@ -1,0 +1,61 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: "{{ .Release.Namespace }}-ingress"
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # --- GKE INGRESS SETTINGS ---
+    # Use GCE (Google Cloud Load Balancer) ingress class
+    "kubernetes.io/ingress.class": "gce"
+{{- if .Values.ingress.staticIpName }}
+    "kubernetes.io/ingress.global-static-ip-name": "{{ .Values.ingress.staticIpName }}"
+{{- end }}
+    
+    # --- CERT-MANAGER SETTINGS ---
+    # This triggers cert-manager to talk to Let's Encrypt
+    "cert-manager.io/cluster-issuer": "{{ .Values.ingress.certIssuer }}"
+    "acme.cert-manager.io/http01-edit-in-place": "true"
+    
+    # GKE Ingress settings
+    "ingress.gcp.kubernetes.io/ssl-redirect": "false"
+
+spec:
+  ingressClassName: gce
+  tls:
+  - hosts:
+    - {{ .Values.siteDomain }}
+    # Cert-manager will generate this secret automatically.
+    # You do NOT need to create it manually.
+    secretName: {{ .Values.ingress.tlsSecretName }}
+  rules:
+  - host: {{ .Values.siteDomain }}
+    http:
+      paths:
+      - backend:
+          service:
+            name: "api"
+            port:
+              number: 8002
+        path: "/api"
+        pathType: Prefix      
+  - host: {{ .Values.siteDomain }}
+    http:
+      paths:
+      - backend:
+          service:
+            name: "platform-service"
+            port:
+              number: 28180
+        path: "/services"
+        pathType: Prefix
+  - host: {{ .Values.siteDomain }}
+    http:
+      paths:
+      - backend:
+          service:
+            name: "fluency8"
+            port:
+              number: 8004
+        path: "/"
+        pathType: Prefix
+
