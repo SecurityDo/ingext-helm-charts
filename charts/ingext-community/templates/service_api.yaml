@@ -3,6 +3,9 @@ kind: Service
 metadata:
   name: api
   namespace: {{ .Release.Namespace }}
+  annotations:
+    cloud.google.com/backend-config: '{"default": "api-backend-config"}'
+    cloud.google.com/neg: '{"ingress": true}'
 spec:
   type: ClusterIP
   sessionAffinity: ClientIP

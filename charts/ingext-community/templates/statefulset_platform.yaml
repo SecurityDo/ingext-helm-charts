@@ -69,6 +69,15 @@ spec:
           mountPath: "/usr/local/share/db-ip"
         - name: platform-data
           mountPath: "/data"
+        readinessProbe:
+          httpGet:
+            path: /health-check
+            port: 28180
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
   ##
   ## This StatefulSet will uses the volumeClaimTemplate field to create a PVC in
   ## the cluster for each replica. These PVCs can not be easily resized later.

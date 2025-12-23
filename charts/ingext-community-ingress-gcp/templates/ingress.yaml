@@ -38,9 +38,6 @@ spec:
               number: 8002
         path: "/api"
         pathType: Prefix      
-  - host: {{ .Values.siteDomain }}
-    http:
-      paths:
       - backend:
           service:
             name: "platform-service"
@@ -48,9 +45,6 @@ spec:
               number: 28180
         path: "/services"
         pathType: Prefix
-  - host: {{ .Values.siteDomain }}
-    http:
-      paths:
       - backend:
           service:
             name: "fluency8"

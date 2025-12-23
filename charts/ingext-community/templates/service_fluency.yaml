@@ -3,6 +3,9 @@ kind: Service
 metadata:
   name: fluency8
   namespace: {{ .Release.Namespace }}
+  annotations:
+    cloud.google.com/backend-config: '{"default": "fluency-backend-config"}'
+    cloud.google.com/neg: '{"ingress": true}'
 spec:
   type: ClusterIP
   sessionAffinity: ClientIP

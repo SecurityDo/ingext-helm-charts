@@ -354,6 +354,143 @@ Lists machine types available in a region, filtered to show GKE-compatible types
 
 **Note:** This shows general machine type availability. GKE has additional restrictions. If a type fails during installation, the installer will show guidance.
 
+### `recreate-ingress.sh` - Recovery Script
+
+Recreates the ingress and associated resources if they were accidentally deleted. This is useful if the ingress was removed but the core installation is still intact.
+
+**Usage:**
+```bash
+./recreate-ingress.sh --domain gcp.k8.ingext.io
+
+# Or use environment file
+source ./ingext-gke.env
+./recreate-ingress.sh
+```
+
+**What it does:**
+- Verifies BackendConfig exists (creates if missing)
+- Annotates API service with BackendConfig
+- Checks/creates static IP
+- Reinstalls ingress Helm chart
+- Waits for IP assignment and provides next steps
+
+**Example:**
+```bash
+# If ingress was accidentally deleted
+./recreate-ingress.sh --namespace ingext --domain gcp.k8.ingext.io
+```
+
+### `test-all.sh` - Comprehensive Test Suite ⭐ **RECOMMENDED**
+
+**Run this first to identify ALL issues at once!**
+
+Tests all backend components systematically with clear PASS/FAIL results. Eliminates guesswork by checking everything in one run.
+
+**What it tests:**
+- Cluster & namespace connectivity
+- Pod status (API, Platform, Fluency)
+- Service configuration and endpoints
+- BackendConfig (health check type and configuration)
+- Ingress configuration (paths, rules, IP, annotations)
+- Ingress backend health status
+- DNS resolution
+- Certificate status (cert-manager, ClusterIssuer, Certificate resource)
+- Direct API access (port-forward test)
+- Ingress API access (via load balancer)
+
+**Usage:**
+```bash
+./test-all.sh --domain gcp.k8.ingext.io
+
+# Or use environment file
+source ./ingext-gke.env
+./test-all.sh
+```
+
+**Output:**
+- Clear PASS/FAIL for each test
+- Summary with total passed/failed/warnings
+- Specific fix recommendations based on failures
+
+**Example:**
+```bash
+# Run comprehensive test
+./test-all.sh --namespace ingext --domain gcp.k8.ingext.io
+
+# Output shows:
+# ✓ PASS: API pods running
+# ✗ FAIL: BackendConfig uses TCP (must be HTTP)
+# ✓ PASS: Ingress has /api path
+# ...
+# 
+# TEST SUMMARY
+# Total Tests: 25
+# Passed: 20
+# Failed: 5
+# 
+# Review the failures above and run the appropriate fix scripts
+```
+
+### `diagnose-certificate.sh` - Certificate Diagnostic Script
+
+Diagnoses certificate issuance issues by checking DNS, cert-manager, ClusterIssuer, ingress annotations, and certificate/challenge status.
+
+**Usage:**
+```bash
+./diagnose-certificate.sh --domain gcp.k8.ingext.io
+
+# Or use environment file
+source ./ingext-gke.env
+./diagnose-certificate.sh
+```
+
+**What it checks:**
+- DNS resolution (does domain resolve to ingress IP?)
+- cert-manager pod status
+- ClusterIssuer readiness
+- Ingress cert-manager annotations
+- Certificate resource status
+- Challenge status and details
+
+**Example:**
+```bash
+# Diagnose why certificate isn't issuing
+./diagnose-certificate.sh --namespace ingext --domain gcp.k8.ingext.io
+```
+
+### `fix-certificate.sh` - Certificate Fix Script
+
+Fixes common certificate issues by deleting and recreating certificate resources. Use this when:
+- Certificate shows "IncorrectIssuer" error
+- HTTP-01 challenges are failing
+- Certificate resource needs to be recreated
+
+**Usage:**
+```bash
+./fix-certificate.sh --domain gcp.k8.ingext.io
+
+# Or use environment file
+source ./ingext-gke.env
+./fix-certificate.sh
+```
+
+**What it does:**
+- Deletes TLS secret with wrong issuer annotation
+- Deletes existing challenges (forces recreation)
+- Deletes Certificate resource (forces recreation)
+- Verifies ingress has correct annotations
+- Waits for cert-manager to recreate resources
+
+**Example:**
+```bash
+# Fix certificate issues
+./fix-certificate.sh --namespace ingext --domain gcp.k8.ingext.io
+
+# Then monitor progress
+kubectl get certificate -n ingext -w
+kubectl get challenge -n ingext -w
+```
+
 ### `cleanup-ingext-gke.sh` - Cleanup Script
 
 Removes Ingext installation and optionally deletes the GKE cluster and project.
@@ -537,11 +674,22 @@ All scripts support environment variables as alternatives to command-line argume
 
 **Note:** The preflight wizard (`./preflight-gcp.sh`) will generate a complete `ingext-gke.env` file with all required variables. You can also manually copy and edit `ingext-gke.env.example` if you prefer.
 
+## Troubleshooting
+
+For detailed troubleshooting information, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
+
+**Common issues:**
+- **Ingress missing:** Use `./recreate-ingress.sh` to restore it
+- **API backend not healthy:** Wait 10-15 minutes for health checks to propagate
+- **DNS not resolving:** Wait 5-15 minutes for DNS propagation
+- **Certificate not issuing:** DNS must resolve correctly first
+
 ## Additional Resources
 
 - [Ingext Helm Charts Repository](https://github.com/SecurityDo/ingext-helm-charts)
 - [Google Kubernetes Engine Documentation](https://cloud.google.com/kubernetes-engine/docs/)
 - [cert-manager Documentation](https://cert-manager.io/docs/)
+- [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) - Detailed troubleshooting guide
 
 ## Support
 

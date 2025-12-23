@@ -398,7 +398,11 @@ helm repo update >/dev/null
 helm upgrade --install cert-manager jetstack/cert-manager \
   --namespace cert-manager \
   --create-namespace \
-  --set crds.enabled=true
+  --set crds.enabled=true || {
+  echo "ERROR: Failed to install cert-manager"
+  echo "This is required for TLS certificate management"
+  exit 1
+}
 
 wait_ns_pods_ready "cert-manager" "600s"
 
@@ -407,13 +411,94 @@ helm upgrade --install ingext-community-certissuer oci://public.ecr.aws/ingext/i
   -n "$NAMESPACE" \
   --set "email=$CERT_EMAIL"
 
+log "Clean up any existing certificate resources (prevent IncorrectIssuer issue)"
+# Delete any existing TLS secret with wrong issuer annotation
+TLS_SECRET="ingext-tls-secret"
+if kubectl get secret "$TLS_SECRET" -n "$NAMESPACE" >/dev/null 2>&1; then
+  ISSUER_ANNOTATION=$(kubectl get secret "$TLS_SECRET" -n "$NAMESPACE" -o jsonpath='{.metadata.annotations.cert-manager\.io/issuer-name}' 2>/dev/null || echo "")
+  CLUSTER_ISSUER_ANNOTATION=$(kubectl get secret "$TLS_SECRET" -n "$NAMESPACE" -o jsonpath='{.metadata.annotations.cert-manager\.io/cluster-issuer-name}' 2>/dev/null || echo "")
+  
+  if [[ -n "$ISSUER_ANNOTATION" ]] || [[ -z "$CLUSTER_ISSUER_ANNOTATION" ]] || [[ "$CLUSTER_ISSUER_ANNOTATION" != "letsencrypt-prod" ]]; then
+    log "Deleting existing TLS secret with incorrect issuer annotation"
+    kubectl delete secret "$TLS_SECRET" -n "$NAMESPACE" 2>/dev/null || true
+  fi
+fi
+
+# Delete any existing certificate resources and challenges
+kubectl delete challenge -n "$NAMESPACE" --all 2>/dev/null || true
+CERT_NAME=$(kubectl get certificate -n "$NAMESPACE" -o name 2>/dev/null | head -1 || echo "")
+if [[ -n "$CERT_NAME" ]]; then
+  log "Deleting existing certificate resource (will be recreated by cert-manager)"
+  kubectl delete "$CERT_NAME" -n "$NAMESPACE" 2>/dev/null || true
+fi
+
 log "Create static IP for Ingress"
 STATIC_IP_NAME="${NAMESPACE}-static-ip"
-gcloud compute addresses create "$STATIC_IP_NAME" --global --project="$PROJECT_ID" 2>&1 || {
-  if echo "$(gcloud compute addresses describe "$STATIC_IP_NAME" --global --project="$PROJECT_ID" 2>&1)" | grep -q "ERROR"; then
-    echo "WARNING: Static IP '$STATIC_IP_NAME' may already exist, continuing..."
+# Check if static IP already exists
+if gcloud compute addresses describe "$STATIC_IP_NAME" --global --project="$PROJECT_ID" >/dev/null 2>&1; then
+  log "Static IP '$STATIC_IP_NAME' already exists, reusing it"
+  STATIC_IP=$(gcloud compute addresses describe "$STATIC_IP_NAME" --global --project="$PROJECT_ID" --format="value(address)" 2>/dev/null || echo "")
+  if [[ -n "$STATIC_IP" ]]; then
+    log "Static IP address: $STATIC_IP"
   fi
-}
+else
+  log "Creating new static IP: $STATIC_IP_NAME"
+  gcloud compute addresses create "$STATIC_IP_NAME" --global --project="$PROJECT_ID" || {
+    echo "ERROR: Failed to create static IP"
+    exit 1
+  }
+  STATIC_IP=$(gcloud compute addresses describe "$STATIC_IP_NAME" --global --project="$PROJECT_ID" --format="value(address)" 2>/dev/null || echo "")
+  if [[ -n "$STATIC_IP" ]]; then
+    log "Created static IP: $STATIC_IP"
+  fi
+fi
+
+log "Create BackendConfig for API service health checks"
+# GKE Ingress only supports HTTP/HTTPS/HTTP2 health checks, not TCP
+# Using HTTP health check on /api path
+cat <<EOF | kubectl apply -f -
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: api-backend-config
+  namespace: $NAMESPACE
+spec:
+  healthCheck:
+    checkIntervalSec: 10
+    timeoutSec: 5
+    healthyThreshold: 2
+    unhealthyThreshold: 3
+    type: HTTP
+    port: 8002
+    requestPath: /api
+EOF
+
+log "Wait for API service to exist before annotating"
+# Wait up to 60 seconds for the API service to be created
+for i in {1..12}; do
+  if kubectl get service api -n "$NAMESPACE" >/dev/null 2>&1; then
+    log "API service found, annotating with BackendConfig"
+    kubectl annotate service api -n "$NAMESPACE" \
+      cloud.google.com/backend-config='{"default": "api-backend-config"}' \
+      --overwrite 2>/dev/null && break || {
+      echo "WARNING: Failed to annotate API service, but continuing..."
+      break
+    }
+  fi
+  if [[ $i -lt 12 ]]; then
+    sleep 5
+  else
+    echo "WARNING: API service not found after 60 seconds, annotation will be skipped"
+    echo "You may need to annotate it manually after the service is created"
+  fi
+done
+
+log "Verify BackendConfig exists before creating ingress"
+if ! kubectl get backendconfig api-backend-config -n "$NAMESPACE" >/dev/null 2>&1; then
+  echo "ERROR: BackendConfig 'api-backend-config' not found in namespace '$NAMESPACE'"
+  echo "This should have been created in the previous step."
+  exit 1
+fi
 
 log "Install GCP ingress (siteDomain=$SITE_DOMAIN)"
 # Use local chart since it's not yet published to ECR
@@ -423,7 +508,14 @@ if [[ -d "$CHART_DIR" ]]; then
   helm upgrade --install ingext-community-ingress-gcp "$CHART_DIR" \
     -n "$NAMESPACE" \
     --set "siteDomain=$SITE_DOMAIN" \
-    --set "ingress.staticIpName=$STATIC_IP_NAME"
+    --set "ingress.staticIpName=$STATIC_IP_NAME" || {
+    echo "ERROR: Failed to install ingress chart"
+    echo "Check that:"
+    echo "  1. BackendConfig exists: kubectl get backendconfig -n $NAMESPACE"
+    echo "  2. API service exists: kubectl get service api -n $NAMESPACE"
+    echo "  3. Chart directory exists: $CHART_DIR"
+    exit 1
+  }
 else
   echo "ERROR: GCP ingress chart not found at $CHART_DIR"
   echo "Please ensure you're running from the ingext-helm-charts repository root"
@@ -434,7 +526,19 @@ log "Show ingresses"
 kubectl get ingress -n "$NAMESPACE" -o wide || true
 
 log "Try to determine public IP from ingress (may take a few minutes to populate)"
-ING_IP="$(kubectl get ingress -n "$NAMESPACE" -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+ING_IP=""
+# Try multiple times as IP assignment can take 2-5 minutes
+for i in {1..6}; do
+  ING_IP="$(kubectl get ingress -n "$NAMESPACE" -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+  if [[ -n "$ING_IP" ]]; then
+    log "Ingress IP detected: $ING_IP"
+    break
+  fi
+  if [[ $i -lt 6 ]]; then
+    log "Waiting for IP assignment (attempt $i/6)..."
+    sleep 30
+  fi
+done
 
 echo ""
 echo "=========================================="
