@@ -248,37 +248,67 @@ fi
 # ============================================================================
 # SECTION 4: BACKEND CONFIG
 # ============================================================================
-log "SECTION 4: BackendConfig (GKE Health Checks)"
+log "SECTION 4: BackendConfigs (GKE Health Checks)"
 
-if kubectl get backendconfig api-backend-config -n "$NAMESPACE" >/dev/null 2>&1; then
-  test_pass "BackendConfig exists"
+check_backend_config() {
+  local name="$1"
+  local port="$2"
+  local path="$3"
   
-  BACKEND_TYPE=$(kubectl get backendconfig api-backend-config -n "$NAMESPACE" -o jsonpath='{.spec.healthCheck.type}' 2>/dev/null || echo "")
-  if [[ "$BACKEND_TYPE" == "HTTP" ]] || [[ "$BACKEND_TYPE" == "HTTPS" ]] || [[ "$BACKEND_TYPE" == "HTTP2" ]]; then
-    test_pass "BackendConfig uses HTTP/HTTPS/HTTP2 (not TCP)"
-  elif [[ "$BACKEND_TYPE" == "TCP" ]]; then
-    test_fail "BackendConfig uses TCP (GKE Ingress doesn't support TCP - must be HTTP/HTTPS/HTTP2)"
+  if kubectl get backendconfig "$name" -n "$NAMESPACE" >/dev/null 2>&1; then
+    test_pass "BackendConfig '$name' exists"
+    
+    local type=$(kubectl get backendconfig "$name" -n "$NAMESPACE" -o jsonpath='{.spec.healthCheck.type}' 2>/dev/null || echo "")
+    if [[ "$type" == "HTTP" ]] || [[ "$type" == "HTTPS" ]] || [[ "$type" == "HTTP2" ]]; then
+      test_pass "  - '$name' uses HTTP/HTTPS/HTTP2"
+    else
+      test_fail "  - '$name' uses $type (GKE L7 requires HTTP/HTTPS/HTTP2)"
+    fi
+    
+    local actual_path=$(kubectl get backendconfig "$name" -n "$NAMESPACE" -o jsonpath='{.spec.healthCheck.requestPath}' 2>/dev/null || echo "")
+    if [[ "$actual_path" == "$path" ]]; then
+      test_pass "  - '$name' has correct requestPath: $actual_path"
+    else
+      test_fail "  - '$name' has requestPath '$actual_path' (expected '$path')"
+    fi
+
+    local actual_port=$(kubectl get backendconfig "$name" -n "$NAMESPACE" -o jsonpath='{.spec.healthCheck.port}' 2>/dev/null || echo "")
+    if [[ "$actual_port" == "$port" ]]; then
+      test_pass "  - '$name' has correct port: $actual_port"
+    else
+      test_fail "  - '$name' has port '$actual_port' (expected '$port')"
+    fi
   else
-    test_warn "BackendConfig health check type: $BACKEND_TYPE"
+    test_fail "BackendConfig '$name' not found"
+  fi
+}
+
+check_backend_config "api-backend-config" "8002" "/health-check"
+check_backend_config "platform-backend-config" "28180" "/health-check"
+check_backend_config "fluency-backend-config" "8004" "/health-check"
+
+# Service Annotations
+check_service_ann() {
+  local svc="$1"
+  local config="$2"
+  local ann=$(kubectl get service "$svc" -n "$NAMESPACE" -o jsonpath='{.metadata.annotations.cloud\.google\.com/backend-config}' 2>/dev/null || echo "")
+  if echo "$ann" | grep -q "$config"; then
+    test_pass "Service '$svc' has correct BackendConfig annotation"
+  else
+    test_fail "Service '$svc' missing or incorrect BackendConfig annotation (found: $ann)"
   fi
   
-  BACKEND_PATH=$(kubectl get backendconfig api-backend-config -n "$NAMESPACE" -o jsonpath='{.spec.healthCheck.requestPath}' 2>/dev/null || echo "")
-  if [[ -n "$BACKEND_PATH" ]]; then
-    test_pass "BackendConfig has requestPath: $BACKEND_PATH"
+  local neg=$(kubectl get service "$svc" -n "$NAMESPACE" -o jsonpath='{.metadata.annotations.cloud\.google\.com/neg}' 2>/dev/null || echo "")
+  if echo "$neg" | grep -q "ingress.:.true"; then
+    test_pass "Service '$svc' has NEG annotation enabled"
   else
-    test_warn "BackendConfig missing requestPath"
+    test_fail "Service '$svc' missing NEG annotation"
   fi
-else
-  test_warn "BackendConfig not found (GKE will use default health checks)"
-fi
+}
 
-# Service Annotation
-BACKEND_ANN=$(kubectl get service api -n "$NAMESPACE" -o jsonpath='{.metadata.annotations.cloud\.google\.com/backend-config}' 2>/dev/null || echo "")
-if [[ -n "$BACKEND_ANN" ]]; then
-  test_pass "API service has BackendConfig annotation"
-else
-  test_warn "API service missing BackendConfig annotation"
-fi
+check_service_ann "api" "api-backend-config"
+check_service_ann "platform-service" "platform-backend-config"
+check_service_ann "fluency8" "fluency-backend-config"
 
 # ============================================================================
 # SECTION 5: INGRESS CONFIGURATION
@@ -349,27 +379,46 @@ fi
 log "SECTION 6: Ingress Backend Health"
 
 if kubectl get ingress ingext-ingress -n "$NAMESPACE" >/dev/null 2>&1; then
-  BACKENDS=$(kubectl describe ingress ingext-ingress -n "$NAMESPACE" 2>/dev/null | grep -A 20 "Backends:" || echo "")
+  # Use describe to get backend statuses
+  DESCRIBE_OUTPUT=$(kubectl describe ingress ingext-ingress -n "$NAMESPACE" 2>/dev/null)
   
-  if echo "$BACKENDS" | grep -q "api.*HEALTHY"; then
-    test_pass "API backend is HEALTHY"
-  elif echo "$BACKENDS" | grep -q "api.*UNHEALTHY"; then
-    test_fail "API backend is UNHEALTHY (check BackendConfig and health checks)"
-  elif echo "$BACKENDS" | grep -q "api"; then
-    test_warn "API backend status unknown"
-  else
-    test_fail "API backend not found in ingress backends"
-  fi
+  check_backend_health() {
+    local svc="$1"
+    local port="$2"
+    
+    # GKE Ingress status is often in the annotations as JSON
+    local backend_json=$(kubectl get ingress ingext-ingress -n "$NAMESPACE" -o jsonpath='{.metadata.annotations.ingress\.kubernetes\.io/backends}' 2>/dev/null || echo "")
+    
+    # Try to find the specific backend in the JSON status first
+    if [[ -n "$backend_json" ]]; then
+      # Look for a key that contains the service name and port
+      local status=$(echo "$backend_json" | grep -o "\"k8s1-[^\"]*-$svc-$port-[^\"]*\":\"[^\"]*\"" | cut -d: -f2 | tr -d '"' || echo "")
+      if [[ "$status" == "HEALTHY" ]]; then
+        test_pass "Backend '$svc:$port' is HEALTHY (from annotation)"
+        return
+      elif [[ "$status" == "UNHEALTHY" ]]; then
+        test_fail "Backend '$svc:$port' is UNHEALTHY (from annotation)"
+        return
+      fi
+    fi
+
+    # Fallback to grep describe output
+    if echo "$DESCRIBE_OUTPUT" | grep -q "$svc:$port.*HEALTHY"; then
+      test_pass "Backend '$svc:$port' is HEALTHY"
+    elif echo "$DESCRIBE_OUTPUT" | grep -q "$svc:$port.*UNHEALTHY"; then
+      test_fail "Backend '$svc:$port' is UNHEALTHY"
+    elif echo "$DESCRIBE_OUTPUT" | grep -q "$svc:$port"; then
+      test_warn "Backend '$svc:$port' status unknown"
+    else
+      test_fail "Backend '$svc:$port' not found in ingress description"
+    fi
+  }
+
+  check_backend_health "api" "8002"
+  check_backend_health "platform-service" "28180"
+  check_backend_health "fluency8" "8004"
   
-  if echo "$BACKENDS" | grep -q "fluency8.*HEALTHY"; then
-    test_pass "Fluency backend is HEALTHY"
-  elif echo "$BACKENDS" | grep -q "fluency8.*UNHEALTHY"; then
-    test_fail "Fluency backend is UNHEALTHY"
-  else
-    test_warn "Fluency backend status unknown"
-  fi
-  
-  # Check for errors
+  # Check for errors in events
   INGRESS_ERRORS=$(kubectl get events -n "$NAMESPACE" --field-selector involvedObject.name=ingext-ingress --sort-by='.lastTimestamp' 2>/dev/null | grep -i "error\|warning" | tail -3 || echo "")
   if [[ -n "$INGRESS_ERRORS" ]]; then
     if echo "$INGRESS_ERRORS" | grep -qi "tcp.*not valid"; then
@@ -527,16 +576,16 @@ else
   echo ""
   
   # Suggest fixes based on failures
-  if kubectl get backendconfig api-backend-config -n "$NAMESPACE" -o jsonpath='{.spec.healthCheck.type}' 2>/dev/null | grep -q "TCP"; then
-    echo "  - BackendConfig uses TCP: ./fix-backendconfig.sh"
+  if kubectl get backendconfig -n "$NAMESPACE" -o jsonpath='{.items[*].spec.healthCheck.type}' 2>/dev/null | grep -q "TCP"; then
+    echo "  - One or more BackendConfigs use TCP: check BackendConfigs in templates"
   fi
   
   if [[ "$RULE_COUNT" -gt 1 ]] 2>/dev/null; then
     echo "  - Ingress has multiple rules: ./fix-ingress-paths.sh"
   fi
   
-  if echo "$BACKENDS" 2>/dev/null | grep -q "api.*UNHEALTHY"; then
-    echo "  - API backend unhealthy: ./fix-backendconfig.sh (then wait 10-15 min)"
+  if echo "$DESCRIBE_OUTPUT" 2>/dev/null | grep -q "UNHEALTHY"; then
+    echo "  - One or more backends are unhealthy: Check /health-check responds with 200 OK (wait 10-15 min for sync)"
   fi
   
   if [[ -z "${ING_IP:-}" ]]; then
