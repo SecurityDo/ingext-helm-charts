@@ -5,7 +5,6 @@
 # Usage: ./setup_ingext_serviceaccount.sh <clusterName> <region> <namespace> <profile> <bucketName>
 # Description: Creates a K8s Service Account with:
 #              1. AWS Permissions (IAM Role) to access S3.
-#              2. K8s Permissions (RBAC Role) to create Pods/PVCs/Jobs.
 # ==============================================================================
 
 set -e # Exit on error
@@ -26,8 +25,6 @@ BUCKET_NAME=$5
 SA_NAME="${NAMESPACE}-sa"
 IAM_ROLE_NAME="ingext_${SA_NAME}"
 IAM_POLICY_NAME="ingext_${SA_NAME}_S3_Policy"
-K8S_ROLE_NAME="${SA_NAME}-manager-role"
-K8S_BINDING_NAME="${SA_NAME}-manager-binding"
 
 # Export Profile for AWS CLI/eksctl
 export AWS_PROFILE=$PROFILE
@@ -120,40 +117,7 @@ eksctl create podidentityassociation \
     --region "$REGION" \
     2>/dev/null || echo "   (Association might already exist, verified.)"
 
-# ==============================================================================
-# PART B: KUBERNETES RBAC SETUP (Pod/PVC/Job Creation)
-# ==============================================================================
 
-echo "-> Creating Kubernetes RBAC Role & Binding..."
-
-cat <<EOF | kubectl apply -f -
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  namespace: $NAMESPACE
-  name: $K8S_ROLE_NAME
-rules:
-- apiGroups: [""]
-  resources: ["pods", "pods/log", "persistentvolumeclaims", "configmaps", "secrets"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["batch"]
-  resources: ["jobs", "cronjobs"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  namespace: $NAMESPACE
-  name: $K8S_BINDING_NAME
-subjects:
-- kind: ServiceAccount
-  name: $SA_NAME
-  namespace: $NAMESPACE
-roleRef:
-  kind: Role
-  name: $K8S_ROLE_NAME
-  apiGroup: rbac.authorization.k8s.io
-EOF
 
 echo "========================================================"
 echo "✅ Setup Complete!"
@@ -162,5 +126,4 @@ echo "Namespace: $NAMESPACE"
 echo "Service Account: $SA_NAME"
 echo "IAM Role: $IAM_ROLE_NAME"
 echo "Bucket Access: $BUCKET_NAME"
-echo "K8s RBAC: $K8S_ROLE_NAME (Pod/Job/PVC Access)"
 echo "========================================================"
