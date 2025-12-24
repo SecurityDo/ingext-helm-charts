@@ -164,6 +164,7 @@ The easiest way to deploy Ingext on Azure AKS is using the helper scripts in the
 
 ```bash
 # 1. Launch the Docker container (includes all tools: az, kubectl, helm)
+chmod +x ingext-shell.sh
 ./ingext-shell.sh
 
 # 2. Navigate to helper scripts
@@ -210,6 +211,120 @@ az aks create \
 
 # Get Credentials
 az aks get-credentials --resource-group my-test-rg --name my-test-cluster
+```
+
+### 3\. Google Cloud Platform (GKE)
+
+#### Recommended: Use Helper Scripts
+
+The easiest way to deploy Ingext on Google Kubernetes Engine (GKE) is using the helper scripts in the `ingext-gke-helper` directory. These scripts automate the entire process and include preflight checks, installation, status monitoring, and cleanup.
+
+> **Important:** The `install-ingext-gke.sh` script covers the complete installation process, including:
+> * GKE regional cluster creation
+> * All dependencies (Redis, OpenSearch, VictoriaMetrics, etcd) - see [Core Installation](#1-core-installation) section below
+> * Application deployment (configuration, initialization, main services)
+> * Ingress and TLS setup (cert-manager, certificate issuer, Google Cloud Load Balancer ingress)
+>
+> If you use the helper scripts, you can skip the [Core Installation](#1-core-installation) and [Ingress & Cloud Configuration](#2-ingress--cloud-configuration) sections below and proceed directly to [Step 3: Login to the management console](#3-login-to-the-management-console-https-sitedomain) after configuring DNS.
+
+**Prerequisites:**
+* **Docker** installed and running
+* **GCP project** with billing enabled
+* **DNS control** for a domain (for ingress and TLS)
+
+**Creating a New GCP Project (if needed):**
+
+If you don't have a GCP project yet, you can create one:
+
+```bash
+# Inside the Docker container (after running ./ingext-gcp-shell.sh)
+# Or on your host if gcloud is installed
+
+# Create a new project (replace 'ingext-test-12345' with your unique project ID)
+# Project ID must be globally unique, 6-30 characters, lowercase letters, numbers, hyphens
+gcloud projects create ingext-test-12345 --name="Ingext Test Project"
+
+# Set the project as active (replace with your actual project ID)
+gcloud config set project ingext-test-12345
+
+# Enable billing (REQUIRED before enabling APIs or creating GKE clusters)
+# Option 1: Via GCP Console (recommended for first-time setup):
+#   https://console.cloud.google.com/billing?project=ingext-test-12345
+#   Click "Link a billing account" and select your billing account
+#
+# Option 2: Via command line (if you have a billing account ID):
+#   gcloud billing projects link ingext-test-12345 --billing-account=BILLING_ACCOUNT_ID
+#
+# To list your billing accounts:
+#   gcloud billing accounts list
+```
+
+**Tip:** Use a timestamp to ensure uniqueness: `ingext-test-$(date +%s)`
+
+**Note:** The `ingext-gcp-shell.sh` script uses the base `ingext-shell` Docker image and mounts your GCP credentials (`$HOME/.config/gcloud`). If `gcloud` is not available in the container, install it:
+```bash
+# Inside the Docker container
+curl https://sdk.cloud.google.com | bash
+exec -l $SHELL
+gcloud init
+```
+A dedicated GCP image may be created later.
+
+**Quick Start:**
+
+```bash
+# 1. Launch the Docker container (mounts GCP credentials, includes kubectl and helm)
+# Note: If gcloud is not available, install it inside the container (see Prerequisites above)
+chmod +x ingext-gcp-shell.sh
+./ingext-gcp-shell.sh
+
+# 2. Navigate to helper scripts
+cd /workspace/ingext-gke-helper
+
+# 3. Run preflight wizard (interactive setup and prerequisite checking)
+chmod +x preflight-gcp.sh
+./preflight-gcp.sh
+
+# 4. Install Ingext (uses settings from preflight)
+source ./ingext-gke.env
+./install-ingext-gke.sh
+
+# 5. Check installation status
+./status-ingext-gke.sh --namespace ingext
+
+# 6. Configure DNS
+./dns-ingext-gke.sh --domain <your-domain>
+```
+
+For detailed instructions, see [HOWTO-GCP.md](ingext-gke-helper/HOWTO-GCP.md) or the [ingext-gke-helper README](ingext-gke-helper/README.md).
+
+#### Manual Installation (Alternative)
+
+If you prefer to install manually without the helper scripts:
+
+```bash
+# Login to GCP
+gcloud auth login
+
+# Set project
+gcloud config set project my-gcp-project
+
+# Enable required APIs
+gcloud services enable container.googleapis.com compute.googleapis.com
+
+# Create GKE regional cluster
+gcloud container clusters create my-test-cluster \
+  --project=my-gcp-project \
+  --region=us-east1 \
+  --num-nodes=2 \
+  --machine-type=e2-standard-4 \
+  --enable-ip-alias \
+  --enable-autoscaling \
+  --min-nodes=1 \
+  --max-nodes=3
+
+# Get Credentials
+gcloud container clusters get-credentials my-test-cluster --region=us-east1 --project=my-gcp-project
 ```
 
 -----
@@ -377,6 +492,67 @@ kubectl describe challenge -n ingext
 # No resources found in ingext namespace (if the challenge is resolved successfully)
 ```
 
+### Option C: Google Cloud Platform (GKE)
+
+> **Note:** If you used the helper scripts (`install-ingext-gke.sh`), ingress and certificates are already configured. Skip to Step 3 to configure DNS.
+
+#### Step 1: Install Cert Manager
+
+Cert-manager is required for handling certificates on GCP.
+
+```bash
+helm repo add jetstack https://charts.jetstack.io
+helm repo update
+
+helm install cert-manager jetstack/cert-manager \
+  --namespace cert-manager \
+  --create-namespace \
+  --set installCRDs=true
+```
+
+#### Step 2: Install Ingress & Cert Issuer
+
+```bash
+# Install Cert Issuer
+helm install ingext-community-certissuer oci://public.ecr.aws/ingext/ingext-community-certissuer \
+  -n ingext \
+  --set email="<your-email-address>"
+
+# Install GCP Ingress
+helm install ingext-community-ingress-gcp oci://public.ecr.aws/ingext/ingext-community-ingress-gcp \
+  -n ingext \
+  --set siteDomain=ingext.k8.ingext.io
+```
+
+#### Step 3: Setup DNS
+
+**Using Helper Scripts:**
+
+```bash
+# Get DNS instructions and verify status
+cd /workspace/ingext-gke-helper
+./dns-ingext-gke.sh --domain ingext.k8.ingext.io
+
+# Wait for DNS to be configured (after creating the DNS record)
+./dns-ingext-gke.sh --domain ingext.k8.ingext.io --wait
+```
+
+**Manual DNS Setup:**
+
+```bash
+# Get the ingress public IP
+kubectl get ingress -n ingext
+```
+
+Setup one DNS A-record from the site domain to the public IP address associated with the Google Cloud Load Balancer.
+
+**Check the Challenge status:**
+
+```bash
+kubectl describe challenge -n ingext
+# No resources found in ingext namespace (if the challenge is resolved successfully)
+```
+
 -----
 
 ## 3\. Login to the management console: https://{siteDomain}
@@ -424,6 +600,36 @@ cd /workspace/ingext-aks-helper
 az aks delete --resource-group <resource-group> --name <cluster-name>
 # remove the resource group
 az group delete --name <resource-group>
+# remove the associated dns record
+```
+
+### Google Cloud Platform (GKE)
+
+#### Using Helper Scripts (Recommended)
+
+If you used the helper scripts for installation, use the cleanup script:
+
+```bash
+# From inside the Docker container (./ingext-gcp-shell.sh)
+cd /workspace/ingext-gke-helper
+
+# Cleanup (automatically loads from ingext-gke.env if available)
+./cleanup-ingext-gke.sh
+
+# Or with explicit arguments
+./cleanup-ingext-gke.sh \
+  --project <project-id> \
+  --region <region> \
+  --cluster-name <cluster-name>
+```
+
+#### Manual Cleanup
+
+```bash
+# remove the cluster
+gcloud container clusters delete <cluster-name> --region=<region> --project=<project-id>
+# optionally remove the project
+gcloud projects delete <project-id>
 # remove the associated dns record
 ```
 
