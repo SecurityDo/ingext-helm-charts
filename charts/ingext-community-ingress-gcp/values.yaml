@@ -9,6 +9,10 @@ ingress:
   # Static IP name for GKE Ingress (created by installer)
   staticIpName: ""
   
+  # Create BackendConfig via Helm chart (install script also creates it)
+  # Set to true for GKE deployments to ensure proper health checks
+  createBackendConfig: true
+  
   # This matches the ClusterIssuer name we created in Phase 1
   certIssuer: "letsencrypt-prod" 
   
