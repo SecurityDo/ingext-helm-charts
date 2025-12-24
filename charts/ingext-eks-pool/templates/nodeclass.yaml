@@ -17,3 +17,7 @@ spec:
   # AMI selection as requested
   amiSelectorTerms:
     {{- toYaml .Values.amiSelectorTerms | nindent 4 }}
+  metadataOptions:
+    httpTokens: required
+    httpPutResponseHopLimit: 2
+    httpEndpoint: enabled
