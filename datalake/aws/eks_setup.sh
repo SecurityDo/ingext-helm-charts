@@ -69,7 +69,14 @@ eksctl create addon \
 echo "Installing gp3 storage class..."
 helm install ingext-aws-gp3 oci://public.ecr.aws/ingext/ingext-aws-gp3
 
-# 7. Setup AWS Load Balancer Controller
+# 7. Install the Mountpoint for Amazon S3 CSI driver
+aws eks create-addon \
+  --cluster-name "$CLUSTER_NAME" \
+  --addon-name aws-mountpoint-s3-csi-driver \
+  --resolve-conflicts OVERWRITE \
+  --region "$REGION"
+
+# 8. Setup AWS Load Balancer Controller
 echo "Setting up AWS Load Balancer Controller..."
 
 # Download and create IAM Policy
@@ -92,7 +99,7 @@ eksctl create podidentityassociation \
   --permission-policy-arns "$POLICY_ARN" \
   --region "$REGION"
 
-# 8. Install LBC via Helm
+# 9. Install LBC via Helm
 echo "Installing Load Balancer Controller via Helm..."
 helm repo add eks https://aws.github.io/eks-charts
 helm repo update
@@ -106,5 +113,3 @@ helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
   --set serviceAccount.name=aws-load-balancer-controller \
   --set region="$REGION" \
   --set vpcId="$VPC_ID"
-
-echo "--- EKS Setup Completed Successfully ---"

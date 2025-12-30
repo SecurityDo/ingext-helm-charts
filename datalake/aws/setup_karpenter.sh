@@ -9,14 +9,14 @@
 set -e # Exit immediately if a command exits with a non-zero status
 
 if [ "$#" -ne 3 ]; then
-    echo "Usage: $0 <cluster-name> <profile> <region>"
-    echo "Example: $0 ingextlake demo us-east-1"
+    echo "Usage: $0 <profile> <region> <cluster-name>"
+    echo "Example: $0 demo us-east-1 my-cluster"
     exit 1
 fi
 
-CLUSTER_NAME=$1
-PROFILE=$2
-REGION=$3
+PROFILE=$1
+REGION=$2
+CLUSTER_NAME=$3
 
 # Export Profile globally so eksctl/aws/helm/kubectl all use it automatically
 export AWS_PROFILE=$PROFILE

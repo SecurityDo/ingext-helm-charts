@@ -10,15 +10,15 @@
 set -e # Exit on error
 
 if [ "$#" -ne 5 ]; then
-    echo "Usage: $0 <clusterName> <region> <namespace> <profile> <bucketName>"
-    echo "Example: $0 ingextlake us-east-1 data-processing demo my-app-data-bucket"
+    echo "Usage: $0 <namespace> <profile> <region> <clusterName> <bucketName>"
+    echo "Example: $0 ingext demo us-east-1 my-cluster my-data-bucket"
     exit 1
 fi
 
-CLUSTER_NAME=$1
-REGION=$2
-NAMESPACE=$3
-PROFILE=$4
+NAMESPACE=$1
+PROFILE=$2
+REGION=$3
+CLUSTER_NAME=$4
 BUCKET_NAME=$5
 
 # Derived Names
@@ -40,10 +40,11 @@ echo "-> AWS Account ID: $ACCOUNT_ID"
 echo "-> Updating kubeconfig..."
 aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$REGION" > /dev/null
 
+# the service account is created by ingext-community chart
 # 3. Create Namespace & Service Account
-echo "-> Creating Kubernetes Namespace & Service Account..."
-kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
-kubectl create serviceaccount "$SA_NAME" -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+#echo "-> Creating Kubernetes Namespace & Service Account..."
+#kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+#kubectl create serviceaccount "$SA_NAME" -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
 # ==============================================================================
 # PART A: AWS IAM SETUP (S3 Access)
