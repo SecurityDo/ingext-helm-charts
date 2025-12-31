@@ -44,7 +44,11 @@
 ./setup_karpenter.sh <profile> <awsRegion> <clusterName>
 ```
 
-## Install Ingext stream (core installation)
+## Install Ingext stream
+
+### core installation
+
+### aws ingress setup
 
 ## Install Ingext datalake
 
