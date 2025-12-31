@@ -394,9 +394,9 @@ helm install ingext-community oci://public.ecr.aws/ingext/ingext-community -n in
 
 ```bash
 # view api service logs
-kubectl logs -n ingext -f ingext-api-0
+kubectl logs -n ingext -f api-0
 # view platform service logs
-kubectl logs -n ingext -f ingext-platform-0
+kubectl logs -n ingext -f platform-0
 ```
 
 -----

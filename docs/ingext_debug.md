@@ -16,6 +16,8 @@ kubectl rollout restart statefulset/api -n <namespace>
 kubectl logs -l "ingext.io/app=platform" -n <namespace> -f
 ## restart 
 kubectl rollout restart statefulset/platform -n <namespace>
+## bash 
+kubectl exec -it -n <namespace> platform-0 -- bash
 ```
 
 ## Management Console
