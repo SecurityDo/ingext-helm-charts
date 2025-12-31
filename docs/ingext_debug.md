@@ -1,0 +1,55 @@
+# ingext k8s debug
+
+## API service
+
+```bash
+## view logs
+kubectl logs -l "ingext.io/app=api" -n <namespace> -f
+## restart 
+kubectl rollout restart statefulset/api -n <namespace>
+```
+
+## Stream service
+
+```bash
+## view logs
+kubectl logs -l "ingext.io/app=platform" -n <namespace> -f
+## restart 
+kubectl rollout restart statefulset/platform -n <namespace>
+```
+
+## Management Console
+
+```bash
+## restart 
+kubectl rollout restart deployment/fluency8 -n <namespace>
+```
+
+## Datalake manager
+
+```bash
+## view logs
+kubectl logs -l "ingext.io/app=lake-mgr" -n <namespace> -f
+## restart 
+kubectl rollout restart statefulset/lake-mgr -n <namespace>
+## bash 
+kubectl exec -it -n <namespace> lake-mgr-0 -- bash
+```
+
+## Datalake worker
+
+```bash
+## view logs
+kubectl logs -l "ingext.io/app=worker" -n <namespace> -f
+## restart 
+kubectl rollout restart deployment/lake-worker -n <namespace>
+```
+
+## Datalake search
+
+```bash
+## view logs
+kubectl logs -l "ingext.io/app=search-service" -n <namespace> -f
+## restart 
+kubectl rollout restart deployment/search-service -n <namespace>
+```
