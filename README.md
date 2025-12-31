@@ -570,7 +570,17 @@ password: ingext
 
 ```bash
 # remove eks cluster
-eksctl delete cluster --name <cluster-name>
+eksctl delete cluster \
+  --name <cluster-name> \
+  --region <awsRegion> \
+  --profile <profile>
+
+# remove s3 bucket
+aws s3 rb s3://<s3-bucket> \
+  --region <awsRegion> \
+  --profile <profile> \
+  --force
+
 # remove the assocated dns record
 ```
 
