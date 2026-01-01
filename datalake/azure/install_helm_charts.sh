@@ -135,7 +135,18 @@ install_chart() {
     fi
 }
 
+# 0. Install ingext-community-config (required by datalake components)
+echo "========================================================"
+echo "-> Installing ingext-community-config (minimal config for datalake)..."
+install_chart "ingext-community-config" "ingext-community-config" \
+    --set account="local" \
+    --set distro="community" \
+    --set siteDomain="ingext.local" \
+    --set infrastructure="azure" \
+    --set region="$LOCATION"
+
 # 1. Install ingext-lake-config (storage configuration)
+echo ""
 echo "========================================================"
 install_chart "ingext-lake-config" "ingext-lake-config" \
     --set storageType=blob \
