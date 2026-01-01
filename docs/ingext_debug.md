@@ -42,7 +42,7 @@ kubectl exec -it -n <namespace> lake-mgr-0 -- bash
 
 ```bash
 ## view logs
-kubectl logs -l "ingext.io/app=worker" -n <namespace> -f
+kubectl logs -l "ingext.io/app=lake-worker" -n <namespace> -f
 ## restart 
 kubectl rollout restart deployment/lake-worker -n <namespace>
 ```

@@ -35,7 +35,7 @@
 ### Create service account with the access permission to the S3 bucket
 
 ```bash
-./setup_ingext_serviceaccount.sh <namespace> <profile> <awsRegion>  <clusterName> <bucketName>
+./setup_ingext_serviceaccount.sh <profile> <awsRegion> <namespace> <clusterName> <bucketName>
 ```
 
 ## Install Karpenter for pod management
@@ -86,4 +86,15 @@ helm install ingext-lake-mgr oci://public.ecr.aws/ingext/ingext-lake-mgr -n inge
 helm install ingext-lake-worker oci://public.ecr.aws/ingext/ingext-lake-worker -n ingext
 
 helm install ingext-search-service oci://public.ecr.aws/ingext/ingext-search-service -n ingext
+```
+
+### Cleanup resources after test
+
+```bash
+# remove eks cluster
+# remove s3 bucket
+# remove iam roles and policies
+./eks_uninstall.sh <profile> <awsRegion> <namespace> <clusterName> <bucketName>
+
+# remove the assocated dns record
 ```

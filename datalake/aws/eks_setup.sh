@@ -18,12 +18,31 @@ export AWS_PROFILE=$PROFILE
 # Fetch AWS Account ID for IAM Policy ARNs
 export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
+
+# Validate CLUSTER_NAME
+# Rule: At most 24 characters
+if [ "${#CLUSTER_NAME}" -gt 24 ]; then
+    echo "Error: CLUSTER_NAME '${CLUSTER_NAME}' is too long. It must be 24 characters or fewer."
+    exit 1
+fi
+
+# Rule: Contain only lowercase alphanumeric characters (a-z, 0-9)
+if ! [[ "$CLUSTER_NAME" =~ ^[a-z0-9]+$ ]]; then
+    echo "Error: CLUSTER_NAME '${CLUSTER_NAME}' contains invalid characters. Use only lowercase alphanumeric characters (a-z, 0-9)."
+    exit 1
+fi
+
+
 echo "--- Starting EKS Setup ---"
 echo "Profile: $AWS_PROFILE"
 echo "Region:  $REGION"
 echo "Cluster: $CLUSTER_NAME"
 echo "Account: $ACCOUNT_ID"
 echo "--------------------------"
+
+
+
+
 
 # 2. Create EKS Cluster
 echo "Creating EKS cluster (this may take 15-20 minutes)..."

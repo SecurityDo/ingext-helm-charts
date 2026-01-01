@@ -10,16 +10,34 @@
 set -e # Exit on error
 
 if [ "$#" -ne 5 ]; then
-    echo "Usage: $0 <namespace> <profile> <region> <clusterName> <bucketName>"
-    echo "Example: $0 ingext demo us-east-1 my-cluster my-data-bucket"
+    echo "Usage: $0 <profile> <region> <namespace> <clusterName> <bucketName>"
+    echo "Example: $0 demo us-east-1 ingext my-cluster my-data-bucket"
     exit 1
 fi
 
-NAMESPACE=$1
-PROFILE=$2
-REGION=$3
+PROFILE=$1
+REGION=$2
+NAMESPACE=$3
 CLUSTER_NAME=$4
 BUCKET_NAME=$5
+
+# Validate NAMESPACE
+# Rule: At most 32 characters
+if [ "${#NAMESPACE}" -gt 32 ]; then
+    echo "Error: NAMESPACE '${NAMESPACE}' is too long. It must be 32 characters or fewer."
+    exit 1
+fi
+
+# Rule: Contain only lowercase alphanumeric (a-z, 0-9) or hyphens (-).
+# Rule: Must start and end with an alphanumeric character.
+# Regex breakdown:
+# ^[a-z0-9]                 -> Starts with alphanumeric
+# ([-a-z0-9]*[a-z0-9])?$    -> Optionally followed by mixed chars, but MUST end with alphanumeric
+if ! [[ "$NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+    echo "Error: NAMESPACE '${NAMESPACE}' is invalid. It must consist of lowercase alphanumeric characters or hyphens, and must start and end with an alphanumeric character."
+    exit 1
+fi
+
 
 # Derived Names
 SA_NAME="${NAMESPACE}-sa"
