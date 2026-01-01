@@ -35,36 +35,43 @@ This document compares the AWS and Azure datalake setup approaches and identifie
    - Manual node pool creation required
 
 3. **Setup Scripts**:
-   - Currently missing: No equivalent to `setup_karpenter.sh`
-   - Node pools created via Azure CLI commands (manual/imperative)
+   - ✅ `setup_aks_nodepools.sh` - Creates and configures node pools (equivalent to `setup_karpenter.sh`)
+   - Node pools created via script (automated, similar to AWS workflow)
 
-## What's Missing in Azure
+## Implementation Status
 
-To make Azure operate more similarly to AWS, the following are needed:
+The following items have been implemented to make Azure operate similarly to AWS:
 
 ### 1. Node Pool Setup Script
 
-**Missing**: A script similar to `setup_karpenter.sh` that automates node pool creation.
+**✅ IMPLEMENTED**: `setup_aks_nodepools.sh` script has been created and implements all required functionality:
 
-**Needed**: `setup_aks_nodepools.sh` that:
-- Creates the merge node pool (pool-merge) with appropriate VM sizes
-- Creates the search node pool (pool-search) with appropriate VM sizes
-- Enables cluster autoscaler on both pools
-- Sets appropriate min/max counts
-- Applies node labels and taints (similar to AWS Karpenter NodePools)
+- ✅ Creates the merge node pool (`poolmerge`) with configurable VM sizes
+- ✅ Creates the search node pool (`poolsearch`) with configurable VM sizes
+- ✅ Enables cluster autoscaler on both pools (`--enable-cluster-autoscaler`)
+- ✅ Sets configurable min/max counts (via environment variables)
+- ✅ Applies node labels (`node-pool=pool-merge`, `node-pool=pool-search`)
+- ✅ Applies node taints (`node-pool=pool-merge:NoSchedule`, `node-pool=pool-search:NoSchedule`)
+- ✅ Handles quota errors with helpful guidance
+- ✅ Idempotent (can be run multiple times safely)
+
+**Note**: Node pool names use alphanumeric format (`poolmerge`, `poolsearch`) due to Azure naming restrictions, but labels and taints use hyphenated names for compatibility with Helm charts.
 
 ### 2. Declarative Node Pool Management
 
-**Current State**: Azure uses imperative `az aks nodepool add` commands
+**✅ IMPLEMENTED**: Using Option B - Script-based approach
+
+**Current State**: Azure uses `setup_aks_nodepools.sh` script that wraps Azure CLI commands
 
 **AWS Equivalent**: Helm charts that create Karpenter NodePools declaratively
 
-**Options for Azure**:
-- **Option A**: Create a Helm chart that uses Kubernetes Jobs to run Azure CLI commands
-- **Option B**: Create a script that wraps Azure CLI commands (simpler, more practical)
-- **Option C**: Use Azure Resource Manager (ARM) templates or Terraform (more complex)
+**Implementation**: 
+- Created `setup_aks_nodepools.sh` script (similar to AWS's approach)
+- Script is idempotent and handles errors gracefully
+- Uses environment variables for configuration (similar to AWS Helm values)
+- Provides same functionality as AWS Helm charts, but via script instead of CRDs
 
-**Recommendation**: Option B - Create a script similar to AWS's approach but using Azure CLI
+**Note**: Azure cannot use pure Kubernetes CRDs for node pools (they're Azure-managed resources), so a script approach is the most practical solution.
 
 ### 3. Consistent Workflow
 
@@ -78,69 +85,66 @@ helm install ingext-merge-pool ...      # ← Uses Helm
 helm install ingext-search-pool ...      # ← Uses Helm
 ```
 
-**Azure Current Workflow**:
+**Azure Current Workflow** (✅ Implemented):
 ```bash
 ./aks_setup.sh
 ./create_blob_storage.sh
 ./setup_ingext_serviceaccount.sh
-# Missing: setup_aks_nodepools.sh
-az aks nodepool add ...                  # ← Manual CLI commands
-az aks nodepool add ...                  # ← Manual CLI commands
+./setup_aks_nodepools.sh                 # ← IMPLEMENTED: Similar to setup_karpenter.sh
 ```
 
-**Azure Target Workflow** (to match AWS):
-```bash
-./aks_setup.sh
-./create_blob_storage.sh
-./setup_ingext_serviceaccount.sh
-./setup_aks_nodepools.sh                 # ← NEW: Similar to setup_karpenter.sh
-# Or use Helm if we create a chart
-```
+**Note**: The workflow now matches AWS in terms of automation and ease of use, even though the underlying mechanisms differ (script vs Helm charts).
 
 ## Similarities (What's Already Aligned)
 
 ✅ Both have cluster setup scripts (`eks_setup.sh` / `aks_setup.sh`)  
 ✅ Both have storage creation scripts (`create_s3_bucket.sh` / `create_blob_storage.sh`)  
 ✅ Both have service account setup scripts  
+✅ Both have node pool/autoscaler setup scripts (`setup_karpenter.sh` / `setup_aks_nodepools.sh`)  
 ✅ Both use similar Helm charts for datalake components  
 ✅ Both have preflight scripts  
 ✅ Both have comprehensive README documentation  
+✅ Both have Helm installation scripts for datalake components  
 
-## Recommended Implementation
+## Implementation Summary
 
-To make Azure operate similarly to AWS, implement:
+✅ **All recommended implementations have been completed:**
 
-### 1. Create `setup_aks_nodepools.sh`
+### 1. ✅ Created `setup_aks_nodepools.sh`
 
-This script should:
-- Accept parameters: resourceGroup, clusterName, location
-- Create pool-merge node pool with:
-  - VM size: Standard_D4s_v3 (or configurable)
+**Status**: Fully implemented with all required features:
+- Accepts parameters: resourceGroup, clusterName, location (or uses environment variables)
+- Creates pool-merge node pool (`poolmerge`) with:
+  - Configurable VM size (default: `Standard_D2s_v3`)
   - Cluster autoscaler enabled
-  - Min: 1, Max: 3
+  - Configurable min/max counts (default: min=1, max=1)
   - Node labels: `node-pool=pool-merge`
   - Taints: `node-pool=pool-merge:NoSchedule`
-- Create pool-search node pool with:
-  - VM size: Standard_D4s_v3 (or configurable)
+- Creates pool-search node pool (`poolsearch`) with:
+  - Configurable VM size (default: `Standard_D2s_v3`)
   - Cluster autoscaler enabled
-  - Min: 1, Max: 2
+  - Configurable min/max counts (default: min=1, max=1)
   - Node labels: `node-pool=pool-search`
   - Taints: `node-pool=pool-search:NoSchedule`
+- Additional features:
+  - Idempotent (can run multiple times safely)
+  - Comprehensive error handling for quota and VM size issues
+  - Proactive quota checking and suggestions
 
-### 2. Update `azure_install.md`
+### 2. ✅ Updated `azure_install.md`
 
-Replace manual `az aks nodepool add` commands with:
-```bash
-./setup_aks_nodepools.sh <resourceGroup> <clusterName> <location>
-```
+**Status**: Updated to use `setup_aks_nodepools.sh` script instead of manual CLI commands
 
-### 3. Update README.md
+### 3. ✅ Updated README.md
 
-Add documentation for `setup_aks_nodepools.sh` similar to how AWS documents `setup_karpenter.sh`
+**Status**: Comprehensive documentation added for `setup_aks_nodepools.sh`, similar to AWS's `setup_karpenter.sh` documentation
 
-### 4. Update Preflight Script
+### 4. ✅ Updated Preflight Script
 
-Add prompts for node pool VM sizes and autoscaler settings
+**Status**: `preflight-azure-datalake.sh` includes:
+- Prompts for node pool VM sizes (`MERGE_VM_SIZE`, `SEARCH_VM_SIZE`)
+- Configuration for min/max counts
+- Saves configuration to environment file for use by `setup_aks_nodepools.sh`
 
 ## Fundamental Differences (Cannot Be Changed)
 
@@ -163,14 +167,23 @@ These are architectural differences that cannot be made identical:
 
 ## Conclusion
 
-The Azure setup can be made **functionally similar** to AWS by:
-1. ✅ Creating `setup_aks_nodepools.sh` script
-2. ✅ Updating documentation to match AWS workflow
-3. ✅ Making node pool creation part of the automated setup
+✅ **The Azure setup is now functionally similar to AWS:**
 
-However, the **underlying architecture** will remain different:
+1. ✅ `setup_aks_nodepools.sh` script created and fully functional
+2. ✅ Documentation updated to match AWS workflow
+3. ✅ Node pool creation is part of the automated setup
+4. ✅ Preflight script includes node pool configuration
+5. ✅ Helm installation script for datalake components
+6. ✅ Comprehensive error handling and quota management
+
+**Workflow Parity Achieved:**
+- Both platforms now have equivalent automation and ease of use
+- Both use similar script-based approaches for setup
+- Both have comprehensive documentation and preflight checks
+
+**Architectural Differences (Expected and Acceptable):**
 - AWS uses Karpenter (Kubernetes-native, more flexible)
 - Azure uses Cluster Autoscaler (Azure-native, simpler but less flexible)
 
-Both approaches achieve the same goal (automatic node scaling) but through different mechanisms.
+Both approaches achieve the same goal (automatic node scaling) but through different mechanisms. The Azure implementation provides the same user experience and functionality as AWS, adapted to Azure's architecture.
 
