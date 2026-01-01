@@ -45,12 +45,27 @@ if [ -n "$SUBNETS" ]; then
     aws ec2 create-tags --resources $SUBNET_LIST --tags Key=karpenter.sh/discovery,Value="$CLUSTER_NAME" --region "$REGION"
 fi
 
-SGS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" --region "$REGION" --query "SecurityGroups[].GroupId" --output text)
-if [ -n "$SGS" ]; then
-    # Convert newline separated SGs to space separated
-    SG_LIST=$(echo $SGS | tr '\n' ' ')
-    aws ec2 create-tags --resources $SG_LIST --tags Key=karpenter.sh/discovery,Value="$CLUSTER_NAME" --region "$REGION"
+#SGS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" --region "$REGION" --query "SecurityGroups[].GroupId" --output text)
+#if [ -n "$SGS" ]; then
+#    # Convert newline separated SGs to space separated
+#    SG_LIST=$(echo $SGS | tr '\n' ' ')
+#    aws ec2 create-tags --resources $SG_LIST --tags Key=karpenter.sh/discovery,Value="$CLUSTER_NAME" --region "$REGION"
+#fi
+
+# --- REPLACE OLD STEP 2 SECURITY GROUP TAGGING ---
+echo "-> Tagging ONLY the Cluster Shared Node Security Group..."
+# Fetch the specific security group EKS created for nodes
+NODE_SG=$(aws eks describe-cluster --name "$CLUSTER_NAME" --region "$REGION" \
+  --query "cluster.resourcesVpcConfig.clusterSecurityGroupId" --output text)
+
+if [ -n "$NODE_SG" ] && [ "$NODE_SG" != "None" ]; then
+    echo "   Found Cluster SG: $NODE_SG"
+    aws ec2 create-tags --resources "$NODE_SG" \
+      --tags Key=karpenter.sh/discovery,Value="$CLUSTER_NAME" --region "$REGION"
+else
+    echo "   Warning: Could not find Cluster Security Group to tag."
 fi
+
 
 # 3. Create Karpenter Node Role (Worker Nodes)
 NODE_ROLE_NAME="KarpenterNodeRole-${CLUSTER_NAME}"

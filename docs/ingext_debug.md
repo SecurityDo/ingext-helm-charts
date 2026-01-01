@@ -55,3 +55,9 @@ kubectl logs -l "ingext.io/app=search-service" -n <namespace> -f
 ## restart 
 kubectl rollout restart deployment/search-service -n <namespace>
 ```
+
+## Karpenter logs
+
+```bash
+kubectl logs -l app.kubernetes.io/instance=karpenter -n kube-system
+```

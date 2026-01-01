@@ -67,6 +67,8 @@ eksctl create addon \
 
 # 6. Install gp3 Storage Class
 echo "Installing gp3 storage class..."
+# refresh aws public ecr login
+aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws
 helm install ingext-aws-gp3 oci://public.ecr.aws/ingext/ingext-aws-gp3
 
 # 7. Install the Mountpoint for Amazon S3 CSI driver
