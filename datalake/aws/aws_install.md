@@ -64,6 +64,7 @@ helm install ingext-lake-config oci://public.ecr.aws/ingext/ingext-lake-config -
 ### Setup node pools for the datalake
 
 ```bash
+# default cpuLimit=8, memoryLimit=64Gi
 helm upgrade --install ingext-merge-pool oci://public.ecr.aws/ingext/ingext-eks-pool \
   --set poolName=pool-merge \
   --set clusterName=<clusterName> \
@@ -74,6 +75,9 @@ helm upgrade --install ingext-merge-pool oci://public.ecr.aws/ingext/ingext-eks-
 helm upgrade --install ingext-search-pool oci://public.ecr.aws/ingext/ingext-eks-pool \
   --set poolName=pool-search \
   --set clusterName=<clusterName> \
+  --set cpuLimit=128 \
+  --set memoryLimit=512Gi \
+  --set consolidationPolicy=WhenEmpty \
   --set-json 'instanceType=["m5.large"]' \
   --set-json 'capacityType=["on-demand"]'
 

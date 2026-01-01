@@ -3,6 +3,9 @@ kind: NodePool
 metadata:
   name: {{ .Values.poolName }}
 spec:
+  limits:
+    cpu: "{{ .Values.cpuLimit }}"
+    memory: "{{ .Values.memoryLimit }}"
   template:
     metadata:
       labels:
@@ -24,5 +27,5 @@ spec:
           value: {{ .Values.poolName }}
           effect: NoSchedule
   disruption:
-    consolidationPolicy: WhenEmpty
+    consolidationPolicy: {{ .Values.consolidationPolicy }}
     consolidateAfter: 10s

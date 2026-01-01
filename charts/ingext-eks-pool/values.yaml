@@ -2,7 +2,9 @@ clusterName:
 poolName:
 # Defaults to KarpenterNodeRole-{{ .Values.clusterName }}
 nodeRoleName:
-
+cpuLimit: 8
+memoryLimit: 64Gi
+consolidationPolicy: WhenEmptyOrUnderutilized
 # AMI Configuration
 amiSelectorTerms:
   - alias: "bottlerocket@latest"
