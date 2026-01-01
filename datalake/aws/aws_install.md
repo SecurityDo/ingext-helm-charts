@@ -85,12 +85,29 @@ helm install ingext-manager-role oci://public.ecr.aws/ingext/ingext-manager-role
 
 helm install ingext-s3-lake oci://public.ecr.aws/ingext/ingext-s3-lake -n ingext --set bucket.name=<bucketName> --set bucket.region=<region>
 
-helm install ingext-lake-mgr oci://public.ecr.aws/ingext/ingext-lake-mgr -n ingext
-
-helm install ingext-lake-worker oci://public.ecr.aws/ingext/ingext-lake-worker -n ingext
-
-helm install ingext-search-service oci://public.ecr.aws/ingext/ingext-search-service -n ingext
+helm install ingext-lake oci://public.ecr.aws/ingext/ingext-lake -n ingext
 ```
+
+### Allow other user to access this EKS cluster
+
+```bash
+aws eks create-access-entry \
+  --profile <profile> \
+  --region <awsRegion> \
+  --cluster-name <YOUR_CLUSTER_NAME> \
+  --principal-arn <YOUR_WEB_USER_ARN> \
+  --type STANDARD
+
+aws eks associate-access-policy \
+  --profile <profile> \
+  --region <awsRegion> \
+  --cluster-name <YOUR_CLUSTER_NAME> \
+  --principal-arn <YOUR_WEB_USER_ARN> \
+  --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
+  --access-scope type=cluster
+```
+
+*(Note: If you only want them to view resources, replace `AmazonEKSClusterAdminPolicy` with `AmazonEKSViewPolicy`)*
 
 ### Cleanup resources after test
 

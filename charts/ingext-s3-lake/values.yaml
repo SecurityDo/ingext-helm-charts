@@ -17,4 +17,4 @@ bucket:
 #shareAccessModes:
 #  - ReadOnlyMany
 #shareVolumeHandle: s3-csi-driver-shared-volume
-driver: s3.csi.aws.com
+#driver: s3.csi.aws.com
