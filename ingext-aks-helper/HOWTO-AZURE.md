@@ -106,7 +106,7 @@ The wizard will prompt you for:
 * **Resource group name** (will be created if it doesn't exist)
 * **AKS cluster name**
 * **Node count** (default: 2)
-* **Node VM size** (shows available sizes automatically)
+* **Node VM size** (Standard_D4as_v5 recommended)
 * **Kubernetes namespace** (default: `ingext`)
 * **Public domain** for Ingext (e.g., `ingext.example.com`)
 * **Email** for certificate issuer (Let's Encrypt)
@@ -293,7 +293,7 @@ If the installer fails with a VM size error, it will show the actual available s
 ./install-ingext-aks.sh --node-vm-size <size-from-error-message>
 ```
 
-Or update your `.env` file and rerun.
+Or update your `.env` file and rerun. Recommended sizes include `Standard_D4as_v5` (AMD EPYC) or Intel alternatives like `standard_dc4ds_v3`.
 
 ### DNS Not Resolving
 

@@ -238,14 +238,14 @@ echo ""
 # Get and display filtered VM sizes
 TABLE_OUTPUT=$(az vm list-sizes --location "$LOCATION" --output table 2>/dev/null || echo "")
 
-# Default to a size that's commonly available for AKS
-DEFAULT_VM_SIZE="standard_dc2ds_v3"  # Fallback default (AKS-commonly-available)
+# Default to a size that's commonly available for AKS and recommended for Ingext (AMD EPYC)
+DEFAULT_VM_SIZE="Standard_D4as_v5"
 
 if [[ -n "$TABLE_OUTPUT" ]]; then
   # Filter to common AKS-compatible sizes
   FILTERED=$(echo "$TABLE_OUTPUT" | \
     grep -E "Standard_[DB][0-9]" | \
-    grep -E "s_v[234]|ds_v[234]|ms_v[234]|_v[234]|as_v[234]|a_v[234]" | \
+    grep -E "s_v[2345]|ds_v[2345]|ms_v[2345]|_v[2345]|as_v[2345]|a_v[2345]" | \
     grep -v -E "_nc|_nv|_hb|_hc|_hx|_fx|_l[0-9]" | \
     head -n 15 || true)
   
@@ -253,32 +253,25 @@ if [[ -n "$TABLE_OUTPUT" ]]; then
     echo "⚠️  WARNING: These are GENERAL VM sizes, not AKS-specific!"
     echo "   AKS has additional restrictions. The installer will show actual AKS-available sizes if this fails."
     echo ""
-    echo "Recommended VM sizes (general availability, showing first 15):"
+    echo "Recommended VM sizes (general purpose AMD EPYC, showing first 15):"
     echo "$FILTERED" | head -n 17
     echo ""
     
-    # Prefer AKS-commonly-available sizes (dc series, m series) if they exist in the list
-    AKS_PREFERRED=$(echo "$FILTERED" | grep -E "Standard_DC|Standard_M[0-9]" | head -n 1 | awk '{print $3}' || echo "")
+    # Prefer dasv5 series if it exists in the list
+    DASV5_PREFERRED=$(echo "$FILTERED" | grep -E "Standard_D[0-9]+as_v5" | head -n 1 | awk '{print $3}' || echo "")
     
-    # Extract the first VM size name from the filtered list as fallback default
-    # The table format from az vm list-sizes has columns: MaxDataDiskCount, MemoryInMb, Name, NumberOfCores, OSDiskSizeInMb, ResourceDiskSizeInMb
-    # So the size name is in the 3rd column
-    FIRST_SIZE=$(echo "$FILTERED" | head -n 1 | awk '{print $3}' || echo "")
-    
-    if [[ -n "$AKS_PREFERRED" ]] && [[ "$AKS_PREFERRED" =~ ^Standard_ ]]; then
-      DEFAULT_VM_SIZE="$AKS_PREFERRED"
-      echo "Default recommendation (AKS-commonly-available): $DEFAULT_VM_SIZE"
-    elif [[ -n "$FIRST_SIZE" ]] && [[ "$FIRST_SIZE" =~ ^Standard_ ]]; then
-      DEFAULT_VM_SIZE="$FIRST_SIZE"
+    if [[ -n "$DASV5_PREFERRED" ]] && [[ "$DASV5_PREFERRED" =~ ^Standard_ ]]; then
+      DEFAULT_VM_SIZE="$DASV5_PREFERRED"
+      echo "Default recommendation (AMD EPYC dasv5): $DEFAULT_VM_SIZE"
+    else
       echo "Default recommendation: $DEFAULT_VM_SIZE"
-      echo "  (Note: If this fails, try: standard_dc2ds_v3 or standard_dc2s_v3)"
     fi
     
     echo ""
     echo "💡 Tip: Common AKS-compatible sizes to try if the default fails:"
-    echo "   - standard_dc2ds_v3 (2 vCPU, 8GB) - Most commonly available"
-    echo "   - standard_dc2s_v3 (2 vCPU, 8GB)"
-    echo "   - standard_dc4ds_v3 (4 vCPU, 16GB)"
+    echo "   - Standard_D4as_v5 (4 vCPU, 16GB) - Recommended AMD EPYC"
+    echo "   - Standard_D2as_v5 (2 vCPU, 8GB)  - Smaller AMD EPYC"
+    echo "   - standard_dc2ds_v3 (2 vCPU, 8GB) - Intel alternative"
     echo ""
   else
     echo "Could not filter sizes. Showing first 10 available:"

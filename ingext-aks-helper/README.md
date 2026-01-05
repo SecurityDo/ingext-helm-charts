@@ -194,7 +194,7 @@ Installs Ingext on AKS following the complete installation flow.
 **Optional Arguments:**
 - `--namespace` - Kubernetes namespace (default: `ingext`)
 - `--node-count` - AKS node count (default: `2`)
-- `--node-vm-size` - AKS node VM size (default: `standard_dc2ds_v3`)
+- `--node-vm-size` - AKS node VM size (default: `Standard_D4as_v5`)
 - `--skip-aks-create` - Skip AKS creation (use existing cluster)
 
 **Example:**
@@ -441,7 +441,7 @@ kubectl get ingress -n ingext -o wide
 - **Solution:** The installer will show actual available sizes in the error message
 - **Fix:** Use one of the sizes from the error message: `./install-ingext-aks.sh --node-vm-size <size-from-error>`
 - **Check:** Run `./list-vm-sizes.sh` to see general availability (note: AKS has additional restrictions)
-- **Common sizes:** `standard_dc2ds_v3`, `standard_dc2s_v3`, `standard_dc4ds_v3`
+- **Common sizes:** `Standard_D4as_v5`, `Standard_D2as_v5`, `standard_dc4ds_v3`
 
 **Problem:** Pods stuck in Pending
 - **Solution:** Check node resources: `kubectl describe nodes`
@@ -487,7 +487,7 @@ All scripts support environment variables as alternatives to command-line argume
 | `CERT_EMAIL` | Certificate email | `admin@example.com` |
 | `NAMESPACE` | Kubernetes namespace | `ingext` |
 | `NODE_COUNT` | AKS node count | `2` |
-| `NODE_VM_SIZE` | AKS node VM size | `standard_dc2ds_v3` |
+| `NODE_VM_SIZE` | AKS node VM size | `Standard_D4as_v5` |
 
 **Note:** The preflight wizard (`./preflight-azure.sh`) will generate a complete `ingext-aks.env` file with all required variables. You can also manually copy and edit `ingext-aks.env.example` if you prefer.
 
