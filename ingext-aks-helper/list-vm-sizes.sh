@@ -88,8 +88,8 @@ TABLE_OUTPUT=$(az vm list-sizes --location "$LOCATION" --output table 2>/dev/nul
 # Exclude specialized sizes (GPU, HPC, etc.)
 FILTERED=$(echo "$TABLE_OUTPUT" | \
   grep -E "Standard_[DB][0-9]" | \
-  grep -E "s_v[234]|ds_v[234]|ms_v[234]|_v[234]" | \
-  grep -v -E "_nc|_nv|_hb|_hc|_hx|_fx|_l[0-9]|_a[0-9]|_ads|_as[^v]" | \
+  grep -E "s_v[2345]|ds_v[2345]|ms_v[2345]|_v[2345]|as_v[2345]|a_v[2345]" | \
+  grep -v -E "_nc|_nv|_hb|_hc|_hx|_fx|_l[0-9]" | \
   head -n 25 || true)
 
 if [[ -z "$FILTERED" ]]; then
@@ -107,9 +107,10 @@ echo ""
 echo "$FILTERED"
 echo ""
 echo "Recommendations:"
-echo "  Small/Testing:  Standard_D2s_v3  (2 vCPU, 8GB)  - Good for testing"
-echo "  Medium:         Standard_D4s_v3  (4 vCPU, 16GB) - Balanced"
-echo "  Large:          Standard_D8s_v3  (8 vCPU, 32GB) - Production workloads"
+echo "  Small/AMD:      Standard_D2as_v5 (2 vCPU, 8GB)  - AMD EPYC (Recommended)"
+echo "  Medium/AMD:     Standard_D4as_v5 (4 vCPU, 16GB) - AMD EPYC (Recommended)"
+echo "  Large/AMD:      Standard_D8as_v5 (8 vCPU, 32GB) - AMD EPYC (Recommended)"
+echo "  Intel/Conf:     Standard_DC2ds_v3 (2 vCPU, 8GB) - Intel with SGX"
 echo ""
 echo "Note: Available sizes depend on your subscription quota."
 echo "If a size is not available, try Standard_B2s or Standard_B4ms for smaller options."
