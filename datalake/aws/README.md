@@ -75,7 +75,7 @@ The setup process follows this order:
 ./create_s3_bucket.sh <profile> <awsRegion> <bucketName> <expireDays>
 
 # 3. Setup service account
-./setup_ingext_serviceaccount.sh <namespace> <profile> <awsRegion> <clusterName> <bucketName>
+./setup_ingext_serviceaccount.sh <profile> <awsRegion> <namespace> <clusterName> <bucketName>
 
 # 4. Install Karpenter
 ./setup_karpenter.sh <profile> <awsRegion> <clusterName>
@@ -196,7 +196,7 @@ aws s3api get-bucket-lifecycle-configuration \
 
 **Usage**:
 ```bash
-./setup_ingext_serviceaccount.sh <namespace> <profile> <awsRegion> <clusterName> <bucketName>
+./setup_ingext_serviceaccount.sh <profile> <awsRegion> <namespace> <clusterName> <bucketName>
 ```
 
 **Parameters**:
