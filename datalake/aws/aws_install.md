@@ -68,7 +68,6 @@ helm install ingext-lake-config oci://public.ecr.aws/ingext/ingext-lake-config -
 helm upgrade --install ingext-merge-pool oci://public.ecr.aws/ingext/ingext-eks-pool \
   --set poolName=pool-merge \
   --set clusterName=<clusterName> \
-  --set-json 'instanceType=["r5.large"]' \
   --set-json 'capacityType=["spot","on-demand"]'
 
 
@@ -77,9 +76,7 @@ helm upgrade --install ingext-search-pool oci://public.ecr.aws/ingext/ingext-eks
   --set clusterName=<clusterName> \
   --set cpuLimit=128 \
   --set memoryLimit=512Gi \
-  --set consolidationPolicy=WhenEmpty \
-  --set-json 'instanceType=["m5.large"]' \
-  --set-json 'capacityType=["on-demand"]'
+  --set-json 'capacityType=["spot","on-demand"]'
 
 helm install ingext-manager-role oci://public.ecr.aws/ingext/ingext-manager-role -n ingext
 
