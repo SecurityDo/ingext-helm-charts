@@ -65,7 +65,7 @@ EOF
 # -------- Defaults (non-critical only) --------
 NAMESPACE="${NAMESPACE:-ingext}"
 NODE_COUNT="${NODE_COUNT:-2}"
-NODE_VM_SIZE="${NODE_VM_SIZE:-Standard_D2s_v3}"
+NODE_VM_SIZE="${NODE_VM_SIZE:-Standard_D4as_v5}"
 SKIP_AKS_CREATE=0
 APPGW_NAME="${APPGW_NAME:-ingext-agw}"
 APPGW_SUBNET_CIDR="${APPGW_SUBNET_CIDR:-10.225.0.0/16}"
