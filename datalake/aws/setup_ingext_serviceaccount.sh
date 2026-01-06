@@ -2,7 +2,7 @@
 
 # ==============================================================================
 # Script Name: setup_ingext_serviceaccount.sh
-# Usage: ./setup_ingext_serviceaccount.sh <clusterName> <region> <namespace> <profile> <bucketName>
+# Usage: ./setup_ingext_serviceaccount.sh <profile> <region> <namespace> <clusterName> <bucketName>
 # Description: Creates a K8s Service Account with:
 #              1. AWS Permissions (IAM Role) to access S3.
 # ==============================================================================

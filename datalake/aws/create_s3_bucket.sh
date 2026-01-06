@@ -19,6 +19,64 @@ REGION=$2
 BUCKET_NAME=$3
 EXPIRE_DAYS=$4
 
+
+# --- S3 Bucket Name Validation Logic ---
+validate_bucket_name() {
+    local name="$1"
+
+    # Rule 1: Length must be between 3 and 63 characters
+    if [[ ${#name} -lt 3 || ${#name} -gt 63 ]]; then
+        echo "Error: Bucket name must be between 3 and 63 characters long."
+        return 1
+    fi
+
+    # Rule 2: Must consist only of lowercase letters, numbers, dots (.), and hyphens (-)
+    if [[ ! "$name" =~ ^[a-z0-9.-]+$ ]]; then
+        echo "Error: Bucket name can only contain lowercase letters, numbers, dots (.), and hyphens (-)."
+        return 1
+    fi
+
+    # Rule 3: Must begin and end with a letter or number
+    if [[ ! "$name" =~ ^[a-z0-9] ]] || [[ ! "$name" =~ [a-z0-9]$ ]]; then
+        echo "Error: Bucket name must begin and end with a letter or number."
+        return 1
+    fi
+
+    # Rule 4: Must not contain two adjacent periods
+    if [[ "$name" =~ \.\. ]]; then
+        echo "Error: Bucket name cannot contain two adjacent periods (..)."
+        return 1
+    fi
+
+    # Rule 5: Must not be formatted as an IP address (e.g., 192.168.5.4)
+    if [[ "$name" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "Error: Bucket name cannot be formatted as an IP address."
+        return 1
+    fi
+
+    # Rule 6: Should not start with xn-- (compatibility mode)
+    if [[ "$name" =~ ^xn-- ]]; then
+        echo "Error: Bucket name should not start with 'xn--'."
+        return 1
+    fi
+
+    # Rule 7: Should not end with -s3alias
+    if [[ "$name" =~ -s3alias$ ]]; then
+        echo "Error: Bucket name should not end with '-s3alias'."
+        return 1
+    fi
+
+    return 0
+}
+
+# Execute Validation
+if ! validate_bucket_name "$BUCKET_NAME"; then
+    echo "Validation Failed. Exiting."
+    exit 1
+fi
+
+echo "Bucket name '$BUCKET_NAME' is valid. Proceeding..."
+
 # Export Profile globally so eksctl/aws/helm/kubectl all use it automatically
 export AWS_PROFILE=$PROFILE
 
