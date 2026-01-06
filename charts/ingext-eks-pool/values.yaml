@@ -5,7 +5,7 @@ nodeRoleName:
 cpuLimit: 8
 memoryLimit: 64Gi
 consolidationPolicy: WhenEmptyOrUnderutilized
-consolidateAfter: 10s
+consolidateAfter: 20s
 # AMI Configuration
 amiSelectorTerms:
   - alias: "bottlerocket@latest"
@@ -13,11 +13,17 @@ amiSelectorTerms:
 # Instance Configuration
 #instanceType: 
 #  - "m5.large"
+instanceCpu: 
+  - "2"
+  - "4"
 
 instanceFamily: 
   - "m5"
   - "c5"
   - "r5"
+  - "m5a"
+  - "c5a"
+  - "r5a"
 
 capacityType: 
   - "spot"

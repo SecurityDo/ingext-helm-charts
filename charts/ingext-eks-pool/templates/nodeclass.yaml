@@ -21,3 +21,5 @@ spec:
     httpTokens: required
     httpPutResponseHopLimit: 2
     httpEndpoint: enabled
+  tags:
+    "ingext.io/app": {{ .Values.poolName }}
