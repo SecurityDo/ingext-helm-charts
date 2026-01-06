@@ -226,8 +226,7 @@ aws s3api get-bucket-lifecycle-configuration \
 # Check pod identity associations
 eksctl get podidentityassociation \
   --cluster <clusterName> \
-  --region <awsRegion> \
-  --profile <profile>
+  --region <awsRegion> 
 
 # Verify IAM role exists
 aws iam get-role --role-name ingext_<namespace>-sa --profile <profile>
