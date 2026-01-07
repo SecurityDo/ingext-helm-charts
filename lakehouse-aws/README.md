@@ -25,8 +25,12 @@ The Lakehouse installer provides a seamless setup experience, combining:
    source lakehouse-aws.env
    ./install-lakehouse.sh
    ```
-4. **Post-Installation (DNS)**: Configure Route 53 to point your domain to the new Load Balancer.
-   - See [Route 53 Setup Guide](ROUTE53_SETUP.md) for detailed instructions.
+4. **Post-Installation (DNS)**: Wait for the AWS Load Balancer to be provisioned and then configure Route 53.
+   - **Watch for your Load Balancer address**:
+     ```bash
+     kubectl get ingress -n ingext -w
+     ```
+   - See [Route 53 Setup Guide](ROUTE53_SETUP.md) for detailed instructions on mapping your domain.
 5. **Cleanup**: Tear down all resources when they are no longer needed.
    ```bash
    source lakehouse-aws.env

@@ -4,10 +4,12 @@ This guide explains how to map your public domain (e.g., `lakehouse.k8.ingext.io
 
 ## Prerequisites
 
-1.  **ALB DNS Name**: You must have the DNS name of your ALB. You can find it with:
+1.  **ALB DNS Name**: You must have the DNS name of your ALB. You can find it and watch for its assignment with:
     ```bash
-    kubectl get ingress -n ingext-lakehouse
+    kubectl get ingress -n ingext -w
     ```
+    *(Note: It may take 2-5 minutes for the `ADDRESS` column to populate as AWS creates the balancer).*
+    
     Example: `alb-ingext-community-ingress-102364318.us-east-2.elb.amazonaws.com`
 2.  **ACM Certificate**: Ensure you have a valid certificate in the same region as your ALB.
 
