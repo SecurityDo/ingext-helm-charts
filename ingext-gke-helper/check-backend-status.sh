@@ -60,3 +60,4 @@ echo "  2. Try removing BackendConfig and let GKE use default health checks"
 echo "  3. Or find the correct health check endpoint for the API"
 echo "  4. Wait 15-20 minutes for GKE to fully process the changes"
 
+

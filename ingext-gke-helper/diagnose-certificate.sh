@@ -294,3 +294,4 @@ echo "  kubectl describe certificate -n $NAMESPACE"
 echo "  kubectl describe challenge -n $NAMESPACE"
 echo "  kubectl logs -n cert-manager -l app=cert-manager"
 
+
