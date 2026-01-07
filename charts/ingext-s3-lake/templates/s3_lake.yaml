@@ -11,7 +11,7 @@ spec:
   storageClassName: "" # Required for static provisioning
   claimRef: # To ensure no other PVCs can claim this PV
     namespace: {{ .Release.Namespace }} # Namespace is required even though it's in "default" namespace.
-    name: s3-lake-{{ .Release.Namespace }}
+    name: cloud-storage-{{ .Release.Namespace }}
   mountOptions:
     - allow-delete
     - region {{ .Values.bucket.region }}
@@ -25,7 +25,7 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: s3-lake-{{ .Release.Namespace }}
+  name: cloud-storage-{{ .Release.Namespace }}
   namespace: {{ .Release.Namespace }}
 spec:
   accessModes: {{- .Values.accessModes | toYaml | nindent 4 }}

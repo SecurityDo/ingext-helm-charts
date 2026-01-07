@@ -29,7 +29,7 @@ spec:
             name: ingext-community-config
         - name: lake-volume
           persistentVolumeClaim:
-            claimName: s3-lake-{{ .Release.Namespace }}
+            claimName: cloud-storage-{{ .Release.Namespace }}
       containers:
       ## This example only has this etcd container.
       - name: search-service
