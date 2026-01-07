@@ -32,39 +32,57 @@ printf "$FORMAT" "S3 Bucket ($S3_BUCKET)" "$(aws s3api head-bucket --bucket "$S3
 
 # 2. Kubernetes Pods Status Helper
 check_pod_status() {
-  local label="$1"
-  local name="$2"
-  local status=$(kubectl get pods -n "$NAMESPACE" -l "$label" -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "NOT DEPLOYED")
-  
-  if [[ "$status" == "Running" ]]; then
-    # Check if all containers in the pod are ready
-    local ready=$(kubectl get pods -n "$NAMESPACE" -l "$label" -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
-    if [[ "$ready" == "false" ]]; then
-      status="Starting (0/1)"
+  local app_name="$1"
+  local display_name="$2"
+  local status=""
+
+  # Try different common label patterns
+  local labels=(
+    "ingext.io/app=$app_name"
+    "app=$app_name"
+    "app.kubernetes.io/name=$app_name"
+  )
+
+  for label in "${labels[@]}"; do
+    status=$(kubectl get pods -n "$NAMESPACE" -l "$label" -o jsonpath='{.items[0].status.phase}' 2>/dev/null || true)
+    if [[ -n "$status" ]]; then
+      # Found it, now check readiness if it's running
+      if [[ "$status" == "Running" ]]; then
+        local ready=$(kubectl get pods -n "$NAMESPACE" -l "$label" -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null || echo "true")
+        if [[ "$ready" == "false" ]]; then
+          status="Starting (0/1)"
+        fi
+      fi
+      break
     fi
+  done
+
+  if [[ -z "$status" ]]; then
+    status="NOT DEPLOYED"
   fi
-  printf "$FORMAT" "$name" "$status"
+
+  printf "$FORMAT" "$display_name" "$status"
 }
 
 # 3. Component Status
 echo ""
 echo "[Core Services]"
-check_pod_status "app=redis" "Redis (Cache)"
-check_pod_status "app=opensearch" "OpenSearch (Search Index)"
-check_pod_status "app=victoria-metrics-single" "VictoriaMetrics (TSDB)"
-check_pod_status "app=etcd" "etcd (Key-Value Store)"
+check_pod_status "redis" "Redis (Cache)"
+check_pod_status "opensearch" "OpenSearch (Search Index)"
+check_pod_status "victoria-metrics-single" "VictoriaMetrics (TSDB)"
+check_pod_status "etcd" "etcd (Key-Value Store)"
 
 echo ""
 echo "[Ingext Stream]"
-check_pod_status "app=api" "API Service"
-check_pod_status "app=platform-service" "Platform Service"
-check_pod_status "app=fluency8" "Fluency Service"
+check_pod_status "api" "API Service"
+check_pod_status "platform" "Platform Service"
+check_pod_status "fluency8" "Fluency Service"
 
 echo ""
 echo "[Ingext Datalake]"
-check_pod_status "app=ingext-lake-mgr" "Lake Manager"
-check_pod_status "app=ingext-search-service" "Lake Search"
-check_pod_status "app=ingext-lake-worker" "Lake Worker"
+check_pod_status "lake-mgr" "Lake Manager"
+check_pod_status "search-service" "Lake Search"
+check_pod_status "lake-worker" "Lake Worker"
 
 echo ""
 echo "[Networking]"
