@@ -51,6 +51,7 @@ For detailed step-by-step instructions on AWS infrastructure configuration, refe
 - `cleanup-lakehouse.sh`: Systematically removes all provisioned AWS and Kubernetes resources.
 - `lakehouse-status.sh`: Shows a two-column status report of all installed components and infrastructure.
 - `add-user-access.sh`: Grants an IAM user (e.g. `kun_develop`) administrative access to the cluster.
+- `lakehouse-logs.sh`: Quick access to error logs for any component (e.g. `./lakehouse-logs.sh api`).
 
 ## Prerequisites
 
