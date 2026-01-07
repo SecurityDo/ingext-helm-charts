@@ -49,6 +49,8 @@ For detailed step-by-step instructions on AWS infrastructure configuration, refe
 - `preflight-lakehouse.sh`: Verifies AWS credentials, checks resource availability, and collects user input.
 - `install-lakehouse.sh`: Orchestrates the creation of EKS, S3, IAM roles, Karpenter, and all Ingext components.
 - `cleanup-lakehouse.sh`: Systematically removes all provisioned AWS and Kubernetes resources.
+- `lakehouse-status.sh`: Shows a two-column status report of all installed components and infrastructure.
+- `add-user-access.sh`: Grants an IAM user (e.g. `kun_develop`) administrative access to the cluster.
 
 ## Prerequisites
 
