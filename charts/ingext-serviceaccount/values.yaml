@@ -1,0 +1,10 @@
+serviceAccount:
+  create: true
+  # Universal standard k8s setting
+  automountServiceAccountToken: true 
+  
+  # AWS Specific
+  # awsRoleArn: "arn:aws:iam::123456789012:role/my-app-role"
+  
+  # Azure Specific (The Client ID of your User Assigned Identity)
+  # azureClientId: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"

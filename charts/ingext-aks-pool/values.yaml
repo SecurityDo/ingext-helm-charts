@@ -1,0 +1,64 @@
+clusterName:
+poolName:
+cpuLimit: 8
+memoryLimit: 64Gi
+consolidationPolicy: WhenEmptyOrUnderutilized
+consolidateAfter: 20s
+
+
+
+imageFamily: "AzureLinux" 
+
+# OPTIONAL: Force a specific subnet if auto-discovery is risky
+# vnetSubnetID: "/subscriptions/..."
+
+instanceCpu: 
+  - "2"
+  - "4"
+
+# CRITICAL: Keep osDiskSizeGB at 60GB to fit on the 75GB local disk of the D2 nodes.
+# If you don't, you lose the Ephemeral OS speed boost.
+osDiskSizeGB: 64
+
+instanceFamily:
+
+# --- 2 vCPU / 8GB RAM / 75GB Cache ---
+  - "Standard_D2d_v5"    # Intel (No Premium)
+  - "Standard_D2ds_v5"   # Intel (Premium support, good fallback)
+  - "Standard_D2ads_v5"  # AMD (Premium support, often cheapest)
+
+# v6 Generation (Newer, faster CPU)
+  - "Standard_D2ds_v6"    # Intel
+  - "Standard_D2ads_v6"   # AMD
+
+  # --- 4 vCPU / 16GB RAM / 150GB Cache ---
+  - "Standard_D4d_v5"
+  - "Standard_D4ds_v5"
+  - "Standard_D4ads_v5"
+
+  # v6 Generation
+  - "Standard_D4ds_v6"
+  - "Standard_D4ads_v6"
+  # --- 8 vCPU / 32GB RAM / 300GB Cache ---
+  # - "Standard_D8d_v5"
+  # - "Standard_D8ds_v5"
+  # - "Standard_D8ads_v5"
+
+  
+  # --- Compute Optimized (c5 equivalents) ---
+  # 2 vCPU / 4GB RAM (c5.large equivalent)
+  # - "Standard_F2s_v2" 
+  # - "Standard_F4s_v2"
+
+  # --- Memory Optimized (r5 equivalents) ---
+  # 2 vCPU / 16GB RAM (r5.large equivalent)
+  - "Standard_E2d_v5"
+  - "Standard_E2ds_v5"
+  - "Standard_E2ads_v5"
+  - "Standard_E2ds_v6"
+  - "Standard_E2ads_v6"
+
+
+capacityType: 
+  - "spot" # Warning: Spot eviction rates on v5 families can be high in some regions
+  - "on-demand"

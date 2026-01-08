@@ -1,0 +1,12 @@
+accessModes:
+  - ReadWriteMany
+
+storage: 2000Gi
+
+blob:
+  resourceGroup: "myResourceGroup"
+  storageAccountName: "aksdata12345"
+  containerName: "datalake"
+  # The Client ID of the User Assigned Identity (created in your setup script)
+  # Run: az identity show -g $RG -n aks-app-identity --query clientId -o tsv
+  azureClientId: "00000000-0000-0000-0000-000000000000"

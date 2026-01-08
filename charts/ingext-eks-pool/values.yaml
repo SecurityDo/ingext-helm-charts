@@ -1,7 +1,7 @@
 clusterName:
 poolName:
 # Defaults to KarpenterNodeRole-{{ .Values.clusterName }}
-nodeRoleName:
+# nodeRoleName:
 cpuLimit: 8
 memoryLimit: 64Gi
 consolidationPolicy: WhenEmptyOrUnderutilized
@@ -24,6 +24,12 @@ instanceFamily:
   - "m5a"
   - "c5a"
   - "r5a"
+  - "m6"
+  - "c6"
+  - "r6"
+  - "m6a"
+  - "c6a"
+  - "r6a"  
 
 capacityType: 
   - "spot"

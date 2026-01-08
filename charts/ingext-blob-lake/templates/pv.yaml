@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: blob-lake
+  annotations:
+    pv.kubernetes.io/provisioned-by: blob.csi.azure.com
+spec:
+  capacity:
+    storage: {{ .Values.storage }}
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: "" # Static provisioning
+  claimRef:
+    namespace: {{ .Release.Namespace }}
+    name: cloud-storage-{{ .Release.Namespace }}
+  mountOptions:
+    - -o allow_other
+    - --file-cache-timeout-in-seconds=120
+    - -o negative_timeout=0
+ 
+  csi:
+    driver: blob.csi.azure.com
+    # Unique volume handle (format: rg#account#container#uuid)
+    # Adding namespace/release ensures uniqueness like your EKS chart
+    volumeHandle: {{ .Values.blob.resourceGroup }}#{{ .Values.blob.storageAccountName }}#{{ .Values.blob.containerName }}#{{ .Release.Namespace }}-lake
+    volumeAttributes:
+      resourceGroup: {{ .Values.blob.resourceGroup }}
+      storageAccountName: {{ .Values.blob.storageAccountName }}
+      containerName: {{ .Values.blob.containerName }}
+      protocol: fuse # Uses BlobFuse2 (standard for S3-like mounts)
+
+      # --- Workload Identity Auth ---
+      # This tells the driver to use the Pod's identity to fetch the key
+
+      AzureStorageAuthType: "workload-identity"
+      AzureStorageIdentityClientID: {{ .Values.blob.azureClientId }}
+      # --- Workload Identity Auth ---
+      # This tells the driver to use the Pod's identity to fetch the key
+      #AzureStorageAuthType: "workload-identity" 
+      #clientID: {{ .Values.blob.clientId }}
+    #nodeStageSecretRef:
+    #  name: blob-secret
+    #  namespace: {{ .Release.Namespace }}

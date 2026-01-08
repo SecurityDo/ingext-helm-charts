@@ -1,0 +1,45 @@
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: {{ .Values.poolName }}
+spec:
+  limits:
+    cpu: "{{ .Values.cpuLimit }}"
+    memory: "{{ .Values.memoryLimit }}"
+  template:
+    metadata:
+      labels:
+        node-pool: {{ .Values.poolName }}
+    spec:
+      nodeClassRef:
+        group: karpenter.azure.com # CHANGED: Azure Group
+        kind: AKSNodeClass         # CHANGED: Azure Kind
+        name: {{ .Values.poolName }}
+      requirements:
+        # CHANGED: "sku-cpu" replaces "instance-cpu"
+        - key: "karpenter.azure.com/sku-cpu"
+          operator: In
+          values: {{ .Values.instanceCpu | toJson }}
+          
+        # SHARED: "capacity-type" works on both clouds
+        - key: "karpenter.sh/capacity-type"
+          operator: In
+          values: {{ .Values.capacityType | toJson }}
+
+        # 2. Instance Type (Strict whitelist for Premium v2 support)
+        # Using the specific list from values.yaml ensures we don't accidentally 
+        # get a "v3" or "v4" instance that might fail to mount the disk.
+        - key: "node.kubernetes.io/instance-type"
+          operator: In
+          values: {{ .Values.instanceFamily | toJson }}  
+          
+        - key: "kubernetes.io/arch"
+          operator: In
+          values: ["amd64"]  
+      taints:
+        - key: node-pool
+          value: {{ .Values.poolName }}
+          effect: NoSchedule
+  disruption:
+    consolidationPolicy: {{ .Values.consolidationPolicy }}
+    consolidateAfter: {{ .Values.consolidateAfter }}

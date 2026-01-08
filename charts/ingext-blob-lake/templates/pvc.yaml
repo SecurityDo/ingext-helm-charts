@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cloud-storage-{{ .Release.Namespace }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  accessModes: {{- .Values.accessModes | toYaml | nindent 4 }}
+  storageClassName: "" # Matches the PV
+  resources:
+    requests:
+      storage: {{ .Values.storage }}
+  volumeName: blob-lake # Binds to the specific PV above

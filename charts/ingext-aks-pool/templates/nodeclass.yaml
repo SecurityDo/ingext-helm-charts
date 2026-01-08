@@ -1,0 +1,15 @@
+apiVersion: karpenter.azure.com/v1beta1
+kind: AKSNodeClass
+metadata:
+  name: {{ .Values.poolName }}
+spec:
+  imageFamily: {{ .Values.imageFamily }}
+  
+  # CRITICAL: Set this to 60GB (or <75GB).
+  # This forces AKS to put the OS on the fast local NVMe temp disk (Ephemeral OS).
+  # If you leave this at default (128GB), it will fallback to slow network storage.
+  osDiskSizeGB: 60  
+  
+  {{- if .Values.vnetSubnetID }}
+  vnetSubnetID: {{ .Values.vnetSubnetID }}
+  {{- end }}
