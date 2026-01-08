@@ -171,9 +171,12 @@ spec:
       ## In some clusters, it is necessary to explicitly set the storage class.
       ## This example will end up using the default storage class.
       ## storageClassName: "manual"
+      {{- if .Values.persistence.storageClass }}
+      storageClassName: {{ .Values.persistence.storageClass | quote }}
+      {{- end }}
       resources:
         requests:
-          storage: 20Gi
+          storage: {{ .Values.persistence.size }}
   persistentVolumeClaimRetentionPolicy: 
     whenDeleted: Retain
     whenScaled: Retain  

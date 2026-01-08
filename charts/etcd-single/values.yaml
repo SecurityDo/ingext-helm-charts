@@ -23,3 +23,7 @@ service:
   - name: "etcd-metrics"
     port: 8080
     targetPort: 8080
+
+persistence:
+  #storageClass:
+  size: 20Gi
