@@ -39,7 +39,7 @@ check_existing_config() {
         echo "----------------------------------------"
         echo ""
         read -rp "Do you want to overwrite this configuration? (y/N): " OVERWRITE
-        if [[ ! "${OVERWRITE,,}" =~ ^[Yy]$ ]]; then
+        if [[ ! "$OVERWRITE" =~ ^[Yy]$ ]]; then
             echo ""
             echo "Keeping existing configuration. Exiting."
             echo ""
@@ -162,7 +162,7 @@ if echo "$SUBSCRIPTIONS" | grep -q "N/A(tenant level account)"; then
   echo "     - az login (and choose a different account)"
   echo ""
   read -rp "Continue anyway? (y/N): " CONTINUE_NO_SUB
-  if [[ ! "${CONTINUE_NO_SUB,,}" =~ ^[Yy]$ ]]; then
+  if [[ ! "$CONTINUE_NO_SUB" =~ ^[Yy]$ ]]; then
     echo "Exiting. Please set up a subscription first."
     exit 2
   fi
@@ -204,7 +204,7 @@ echo ""
 
 # Ask if user wants to switch subscriptions
 read -rp "Use this subscription? (Y/n): " USE_CURRENT
-if [[ "${USE_CURRENT,,}" == "n" ]]; then
+if [[ "$USE_CURRENT" == "n" || "$USE_CURRENT" == "N" ]]; then
   echo ""
   echo "Options:"
   echo "  1) Select a different subscription from the list above"
@@ -537,7 +537,7 @@ else
         echo "    3. Use a different region with available quota"
         echo ""
         read -rp "  Continue anyway? (yes/no): " CONTINUE_ANYWAY
-        if [[ ! "${CONTINUE_ANYWAY,,}" =~ ^yes$ ]]; then
+        if [[ ! "$CONTINUE_ANYWAY" =~ ^[Yy][Ee][Ss]$ ]]; then
             echo ""
             echo "Exiting. Please resolve quota issues before proceeding."
             exit 1
@@ -571,22 +571,22 @@ echo ""
 echo "---------------- Preflight summary ----------------"
 WARN=0
 
-if [[ "${HAS_BILLING,,}" != "yes" ]]; then
+if [[ "$HAS_BILLING" != "yes" && "$HAS_BILLING" != "YES" ]]; then
   echo "WARNING: Billing not confirmed. Install will likely fail."
   WARN=1
 fi
 
-if [[ "${HAS_OWNER,,}" != "yes" ]]; then
+if [[ "$HAS_OWNER" != "yes" && "$HAS_OWNER" != "YES" ]]; then
   echo "WARNING: Owner/Contributor-level permissions not confirmed. Install will likely fail."
   WARN=1
 fi
 
-if [[ "${HAS_STORAGE,,}" != "yes" ]]; then
+if [[ "$HAS_STORAGE" != "yes" && "$HAS_STORAGE" != "YES" ]]; then
   echo "WARNING: Storage account naming requirements not understood."
   WARN=1
 fi
 
-if [[ "${HAS_QUOTA,,}" == "no" ]]; then
+if [[ "$HAS_QUOTA" == "no" || "$HAS_QUOTA" == "NO" ]]; then
   echo "WARNING: Quota likely insufficient in $LOCATION."
   WARN=1
 fi

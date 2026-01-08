@@ -118,7 +118,7 @@ if [[ -z "$PROJECTS" ]] || echo "$PROJECTS" | grep -q "^$"; then
   echo "     - gcloud auth login (and choose a different account)"
   echo ""
   read -rp "Continue anyway? (y/N): " CONTINUE_NO_PROJECT
-  if [[ ! "${CONTINUE_NO_PROJECT,,}" =~ ^[Yy]$ ]]; then
+  if [[ ! "$CONTINUE_NO_PROJECT" =~ ^[Yy]$ ]]; then
     echo "Exiting. Please set up a project first."
     exit 2
   fi
@@ -158,7 +158,7 @@ echo ""
 
 # Ask if user wants to switch projects
 read -rp "Use this project? (Y/n): " USE_CURRENT
-if [[ "${USE_CURRENT,,}" == "n" ]]; then
+if [[ "$USE_CURRENT" == "n" || "$USE_CURRENT" == "N" ]]; then
   echo ""
   echo "Options:"
   echo "  1) Select a different project from the list above"

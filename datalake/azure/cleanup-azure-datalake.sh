@@ -47,7 +47,7 @@ echo "Subscription: $SUBSCRIPTION_NAME ($SUBSCRIPTION_ID)"
 echo ""
 
 read -rp "⚠️  Are you sure you want to delete these resources? (yes/no): " CONFIRM
-if [[ ! "${CONFIRM,,}" =~ ^yes$ ]]; then
+if [[ "$CONFIRM" != "yes" && "$CONFIRM" != "YES" ]]; then
     echo "Cancelled. No resources were deleted."
     exit 0
 fi
