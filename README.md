@@ -2,6 +2,14 @@
 
 Welcome to the **ingext-community** repository. This project provides the Helm charts and configuration necessary to deploy the Ingext application on Kubernetes.
 
+## 🚀 Complete Lakehouse Deployments (Recommended)
+
+For the fastest and most reliable setup, we recommend using our unified Lakehouse installers. These automated suites handle the entire process from cloud infrastructure provisioning to application deployment.
+
+*   **[AWS Lakehouse Deployment](lakehouse-aws/README.md):** A complete, unified installer for Ingext Stream and Datalake on AWS EKS, including S3, Karpenter, and ALB.
+*   **[Azure Lakehouse Deployment](ingext-aks-helper/README.md):** A comprehensive helper suite for deploying Ingext on Azure AKS with Application Gateway and automated TLS.
+*   **[GCP Lakehouse Deployment](ingext-gke-helper/README.md):** A complete helper suite for deploying Ingext on Google Kubernetes Engine (GKE) with Google Cloud Load Balancer.
+
 ## Prerequisites
 
 Before deploying, ensure you have the following installed and configured:
@@ -17,9 +25,29 @@ OR run ingext cloud toolbox from a docker image. [Install from ingext cloud tool
 
 ## Prepare K8s cluster
 
-### 1\. AWS EKS
+### 1\. AWS Cloud (EKS)
 
-#### Create one EKS cluster with eksctl
+#### Recommended: Use Unified Lakehouse Installer
+
+The easiest way to deploy Ingext on AWS EKS is using the unified installer in the `lakehouse-aws` directory. This script automates the entire process, including EKS cluster creation, S3 bucket setup, Karpenter, and Load Balancer configuration.
+
+**Quick Start:**
+
+```bash
+# 1. Launch the Docker container
+chmod +x lakehouse-aws/start-docker-shell.sh
+./lakehouse-aws/start-docker-shell.sh
+
+# 2. Run preflight wizard
+./preflight-lakehouse.sh
+
+# 3. Install Lakehouse
+./install-lakehouse.sh
+```
+
+For detailed instructions, see the [AWS Lakehouse README](lakehouse-aws/README.md).
+
+#### Manual EKS Cluster Creation (Alternative)
 
 Expected Time: This process typically takes 15–20 minutes to complete.
 
