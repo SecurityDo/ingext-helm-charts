@@ -11,7 +11,7 @@ data:
       "application":"Ingext",
       "region":"{{ .Values.region }}",
       "distro":"{{ .Values.distro }}",
-      "infrastructure":"{{ .Values.infrastructure }}",
+      "infrastructure":"{{ .Values.k8sProvider }}",
       "localQueue": true,
       "services":[
          {"name":"vm", "url":"http://vmsingle:8428"},
