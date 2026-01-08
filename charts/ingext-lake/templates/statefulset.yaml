@@ -44,6 +44,9 @@ spec:
       ## will need to update the labeling schema to be unique per etcd cluster.
       labels:
         "ingext.io/app": "lake-mgr"
+        {{- if eq .Values.k8sProvider "aks" }}
+        "azure.workload.identity/use": "true"
+        {{- end }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -77,6 +80,8 @@ spec:
         - name: datalake-api
           containerPort: 19010
         env:
+          - name: K8S_PROVIDER
+            value: {{ .Values.k8sProvider }}
           - name: WORKER_VERSION
             value: {{ .Values.lakeWorkerVersion }}
           - name: POD_IP

@@ -16,7 +16,7 @@ metadata:
     #"acme.cert-manager.io/http01-edit-in-place": "true"
     # Optional: If you encounter 502 errors during the challenge, 
     # sometimes increasing the timeout helps AGIC update routes in time.
-    "appgw.ingress.kubernetes.io/request-timeout": "60"
+    "appgw.ingress.kubernetes.io/request-timeout": "600"
 
 spec:
   ingressClassName: azure-application-gateway

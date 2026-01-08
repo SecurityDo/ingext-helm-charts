@@ -5,3 +5,5 @@ lakeSearchVersion: latest
 
 podLabels: {}
 # azure.workload.identity/use: "true"
+# Options: eks, aks, gke
+k8sProvider: "aws"

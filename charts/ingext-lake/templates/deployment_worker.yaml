@@ -16,6 +16,9 @@ spec:
     metadata:
       labels:
         "ingext.io/app": "lake-worker"
+        {{- if eq .Values.k8sProvider "aks" }}
+        "azure.workload.identity/use": "true"
+        {{- end }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -50,6 +53,8 @@ spec:
             cpu: "0.3"
             memory: 1600Mi
         env:
+          - name: K8S_PROVIDER
+            value: {{ .Values.k8sProvider }}
           - name: POD_ID
             valueFrom:
               fieldRef:

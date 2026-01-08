@@ -34,6 +34,12 @@ spec:
       ## will need to update the labeling schema to be unique per etcd cluster.
       labels:
         "ingext.io/app": "platform"
+        {{- if eq .Values.k8sProvider "aks" }}
+        "azure.workload.identity/use": "true"
+        {{- end }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       annotations:
         ##
         ## This gets referenced in the etcd container's configuration as part of
@@ -62,6 +68,9 @@ spec:
         ports:
         - name: platform
           containerPort: 28180
+        env:
+        - name: K8S_PROVIDER
+          value: {{ .Values.k8sProvider }}  
         volumeMounts:
         - name: config-volume
           mountPath: "/etc/config"
