@@ -247,3 +247,4 @@ echo "  # Check DNS status"
 echo "  ./dns-ingext-gke.sh --namespace $NAMESPACE"
 echo ""
 
+

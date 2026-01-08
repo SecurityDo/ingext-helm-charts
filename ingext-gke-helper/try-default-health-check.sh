@@ -56,3 +56,4 @@ echo "  ./test-all.sh --domain gcp.k8.ingext.io"
 echo "  kubectl describe ingress ingext-ingress -n $NAMESPACE | grep -A 10 'Backends:'"
 echo ""
 
+

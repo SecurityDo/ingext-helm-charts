@@ -112,7 +112,7 @@ aws eks associate-access-policy \
 # remove eks cluster
 # remove s3 bucket
 # remove iam roles and policies
-./eks_uninstall.sh <profile> <awsRegion> <namespace> <clusterName> <bucketName>
+./eks_uninstall.sh <profile> <awsRegion> <clusterName> <namespace> <bucketName>
 
 # remove the assocated dns record
 ```

@@ -75,13 +75,16 @@ The setup process follows this order:
 ./create_s3_bucket.sh <profile> <awsRegion> <bucketName> <expireDays>
 
 # 3. Setup service account
-./setup_ingext_serviceaccount.sh <namespace> <profile> <awsRegion> <clusterName> <bucketName>
+./setup_ingext_serviceaccount.sh <profile> <awsRegion> <namespace> <clusterName> <bucketName>
 
 # 4. Install Karpenter
 ./setup_karpenter.sh <profile> <awsRegion> <clusterName>
 
 # 5. Install Ingext datalake (see aws_install.md for details)
 # Follow the installation steps in aws_install.md
+
+# 6. Cleanup (when done)
+./eks_uninstall.sh <profile> <awsRegion> <clusterName> <namespace> <bucketName>
 ```
 
 ## Scripts Documentation
@@ -196,13 +199,13 @@ aws s3api get-bucket-lifecycle-configuration \
 
 **Usage**:
 ```bash
-./setup_ingext_serviceaccount.sh <namespace> <profile> <awsRegion> <clusterName> <bucketName>
+./setup_ingext_serviceaccount.sh <profile> <awsRegion> <namespace> <clusterName> <bucketName>
 ```
 
 **Parameters**:
-- `namespace`: Kubernetes namespace (typically `ingext`)
 - `profile`: AWS profile name
 - `awsRegion`: AWS region
+- `namespace`: Kubernetes namespace (typically `ingext`)
 - `clusterName`: EKS cluster name
 - `bucketName`: S3 bucket name (must match the bucket created earlier)
 
@@ -285,6 +288,40 @@ kubectl logs -n kube-system -l app.kubernetes.io/name=karpenter
 # Check Karpenter metrics
 kubectl get deployment -n kube-system karpenter
 ```
+
+---
+
+### eks_uninstall.sh
+
+**Purpose**: Performs a comprehensive cleanup of all resources created by the setup scripts.
+
+**What it does**:
+- Deletes the EKS cluster via `eksctl`
+- Forcefully removes the S3 bucket and all its contents
+- Deletes IAM roles created for the application, Karpenter, and nodes
+- Deletes IAM policies for Load Balancer, S3, and Karpenter
+- Terminates lingering Karpenter-managed EC2 instances
+- Deletes EBS volumes tagged for the namespace
+- Removes the cluster context from local `kubeconfig`
+
+**Usage**:
+```bash
+./eks_uninstall.sh <profile> <awsRegion> <clusterName> <namespace> <bucketName>
+```
+
+**Parameters**:
+- `profile`: AWS profile name
+- `awsRegion`: AWS region where resources were created
+- `clusterName`: Name of the EKS cluster to delete
+- `namespace`: Kubernetes namespace to clean up volumes for
+- `bucketName`: S3 bucket name to delete
+
+**Example**:
+```bash
+./eks_uninstall.sh demo us-east-1 ingext-lake ingext my-ingext-datalake-bucket
+```
+
+**Estimated Time**: 15-25 minutes
 
 ---
 
@@ -420,12 +457,15 @@ For a complete setup, execute scripts in this order:
 ./create_s3_bucket.sh <profile> <region> <bucket-name> <expire-days>
 
 # 3. Service Account
-./setup_ingext_serviceaccount.sh <namespace> <profile> <region> <cluster-name> <bucket-name>
+./setup_ingext_serviceaccount.sh <profile> <region> <namespace> <clusterName> <bucketName>
 
 # 4. Karpenter
 ./setup_karpenter.sh <profile> <region> <cluster-name>
 
 # 5. Follow aws_install.md for datalake component installation
+
+# 6. Cleanup (when done)
+./eks_uninstall.sh <profile> <region> <cluster-name> <namespace> <bucketName>
 ```
 
 Make all scripts executable before running:

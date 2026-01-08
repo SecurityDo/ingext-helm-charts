@@ -301,3 +301,4 @@ echo "  kubectl describe ingress ingext-ingress -n $NAMESPACE"
 echo "  kubectl get endpoints api -n $NAMESPACE"
 echo "  kubectl logs -n $NAMESPACE -l ingext.io/app=api --tail=50"
 
+
