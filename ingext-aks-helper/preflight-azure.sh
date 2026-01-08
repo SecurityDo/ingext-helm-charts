@@ -110,7 +110,7 @@ if echo "$SUBSCRIPTIONS" | grep -q "N/A(tenant level account)"; then
   echo "     - az login (and choose a different account)"
   echo ""
   read -rp "Continue anyway? (y/N): " CONTINUE_NO_SUB
-  if [[ ! "${CONTINUE_NO_SUB,,}" =~ ^[Yy]$ ]]; then
+  if [[ ! "$CONTINUE_NO_SUB" =~ ^[Yy]$ ]]; then
     echo "Exiting. Please set up a subscription first."
     exit 2
   fi
@@ -152,7 +152,7 @@ echo ""
 
 # Ask if user wants to switch subscriptions
 read -rp "Use this subscription? (Y/n): " USE_CURRENT
-if [[ "${USE_CURRENT,,}" == "n" ]]; then
+if [[ "$USE_CURRENT" == "n" || "$USE_CURRENT" == "N" ]]; then
   echo ""
   echo "Options:"
   echo "  1) Select a different subscription from the list above"

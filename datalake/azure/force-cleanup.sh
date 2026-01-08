@@ -67,7 +67,7 @@ fi
 echo ""
 
 read -rp "⚠️  Delete ALL of these resources? (yes/no): " CONFIRM
-if [[ ! "${CONFIRM,,}" =~ ^yes$ ]]; then
+if [[ ! "$CONFIRM" =~ ^[Yy][Ee][Ss]$ ]]; then
     echo "Cancelled."
     exit 0
 fi
