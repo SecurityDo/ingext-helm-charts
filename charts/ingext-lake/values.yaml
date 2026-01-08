@@ -2,3 +2,6 @@ lakeMgrVersion: latest
 searchServiceVersion: latest
 lakeWorkerVersion: latest
 lakeSearchVersion: latest
+
+podLabels: {}
+# azure.workload.identity/use: "true"

@@ -44,6 +44,9 @@ spec:
       ## will need to update the labeling schema to be unique per etcd cluster.
       labels:
         "ingext.io/app": "lake-mgr"
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       annotations:
         ##
         ## This gets referenced in the etcd container's configuration as part of

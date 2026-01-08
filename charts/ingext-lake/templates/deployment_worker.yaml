@@ -16,6 +16,9 @@ spec:
     metadata:
       labels:
         "ingext.io/app": "lake-worker"
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       serviceAccountName: {{ .Release.Namespace }}-sa
       ##
