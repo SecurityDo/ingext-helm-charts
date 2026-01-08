@@ -33,12 +33,12 @@ spec:
       # --- Workload Identity Auth ---
       # This tells the driver to use the Pod's identity to fetch the key
 
-      AzureStorageAuthType: "workload-identity"
-      AzureStorageIdentityClientID: {{ .Values.blob.azureClientId }}
+      #AzureStorageAuthType: "workload-identity"
+      #AzureStorageIdentityClientID: {{ .Values.blob.azureClientId }}
       # --- Workload Identity Auth ---
       # This tells the driver to use the Pod's identity to fetch the key
       #AzureStorageAuthType: "workload-identity" 
       #clientID: {{ .Values.blob.clientId }}
-    #nodeStageSecretRef:
-    #  name: blob-secret
-    #  namespace: {{ .Release.Namespace }}
+    nodeStageSecretRef:
+      name: blob-secret
+      namespace: {{ .Release.Namespace }}
