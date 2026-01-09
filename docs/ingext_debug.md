@@ -1,5 +1,20 @@
 # ingext k8s debug
 
+## utility scripts
+
+```bash
+# set default namespace
+kubens ns-datalake
+# view service log
+scripts/ingextlog.sh api|stream|mgr|worker|search
+# reset service
+scripts/ingextreset.sh ui|api|stream|mgr|worker|search
+# login to the pod
+scripts/ingextbash.sh stream|mgr
+# view pod log
+scripts/podlog.sh <pod-name>
+```
+
 ## API service
 
 ```bash
