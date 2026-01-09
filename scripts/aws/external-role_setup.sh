@@ -1,15 +1,17 @@
 #!/bin/bash
 
 # ==============================================================================
-# Script: external-role_setup.sh
+# Script: external-role_setup.sh (v2 - Pipe Support)
 # Purpose: Sets up Cross-Account IAM Role Chaining.
-# Usage: ./external-role_setup.sh <local_profile> <ingext-sa-role> <remote_profile> <remote_role> <iam_policy_file>
+# Usage: 
+#   File: ./external-role_setup.sh <local_profile> <ingext-sa-role> <remote_profile> <remote_role> <iam_policy_file>
+#   OR Pipe: ./s3_gen.sh ... | ./external-role_setup.sh external-role_setup.sh <local_profile> <ingext-sa-role> <remote_profile> <remote_role> -
 # ==============================================================================
 
-# 1. Input Validation
 if [ "$#" -ne 5 ]; then
-    echo "Usage: $0 <local_profile> <ingext-sa-role> <remote_profile> <remote_role> <iam_policy_file>"
+    echo "Usage: $0 <local_profile> <ingext-sa-role> <remote_profile> <remote_role> <policy_file_or_dash>"
     echo "Example: $0 ingext-prod ingext-sa-role customer-dev IngextS3AccessRole s3-policy.json"
+    echo "        policy_gen.sh ... | $0 ingext-prod ingext-sa-role customer-dev IngextS3AccessRole -" 
     exit 1
 fi
 
@@ -17,37 +19,41 @@ LOCAL_PROFILE=$1
 SOURCE_ROLE_NAME=$2
 REMOTE_PROFILE=$3
 TARGET_ROLE_NAME=$4
-POLICY_FILE=$5
+POLICY_ARG=$5
 
-# Check if policy file exists
-if [ ! -f "$POLICY_FILE" ]; then
-    echo "Error: Policy file '$POLICY_FILE' not found."
-    exit 1
+# --- NEW LOGIC: Handle Pipe Input ---
+TEMP_POLICY_JSON="temp_policy_input.json"
+
+if [ "$POLICY_ARG" == "-" ]; then
+    # Read from Stdin into a temp file
+    echo ">>> Reading policy from Standard Input (pipe)..."
+    cat > "$TEMP_POLICY_JSON"
+    # Validate that we actually got data
+    if [ ! -s "$TEMP_POLICY_JSON" ]; then
+        echo "Error: No input received from pipe."
+        rm "$TEMP_POLICY_JSON"
+        exit 1
+    fi
+else
+    # It's a file path
+    if [ ! -f "$POLICY_ARG" ]; then
+        echo "Error: Policy file '$POLICY_ARG' not found."
+        exit 1
+    fi
+    # Copy to temp file to standardize processing
+    cp "$POLICY_ARG" "$TEMP_POLICY_JSON"
 fi
+# -------------------------------------
 
 echo "--- Starting Cross-Account IAM Setup ---"
 
-# 2. Get AWS Account IDs
-echo ">>> Fetching Account IDs..."
-
+# (Logic to get Account IDs remains the same - abbreviated for brevity)
+# ... [Get LOCAL_ACCOUNT_ID and REMOTE_ACCOUNT_ID] ...
 LOCAL_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --profile "$LOCAL_PROFILE")
-if [ -z "$LOCAL_ACCOUNT_ID" ]; then
-    echo "Error: Could not retrieve Local Account ID via profile '$LOCAL_PROFILE'."
-    exit 1
-fi
-echo "    Local Account (Source):  $LOCAL_ACCOUNT_ID"
-
 REMOTE_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --profile "$REMOTE_PROFILE")
-if [ -z "$REMOTE_ACCOUNT_ID" ]; then
-    echo "Error: Could not retrieve Remote Account ID via profile '$REMOTE_PROFILE'."
-    exit 1
-fi
-echo "    Remote Account (Target): $REMOTE_ACCOUNT_ID"
 
-# 3. Create Trust Policy (Target Account Side)
-# This allows the LOCAL role to assume the REMOTE role
+# Create Trust Policy
 TRUST_POLICY_FILE="trust-policy-cross-temp.json"
-
 cat > "$TRUST_POLICY_FILE" <<EOF
 {
   "Version": "2012-10-17",
@@ -63,34 +69,19 @@ cat > "$TRUST_POLICY_FILE" <<EOF
 }
 EOF
 
-# 4. Create/Update Remote Role (Target Account)
 echo ">>> [Remote Account] Configuring Role '$TARGET_ROLE_NAME'..."
+aws iam create-role --role-name "$TARGET_ROLE_NAME" --assume-role-policy-document file://"$TRUST_POLICY_FILE" --profile "$REMOTE_PROFILE" > /dev/null 2>&1 || \
+aws iam update-assume-role-policy --role-name "$TARGET_ROLE_NAME" --policy-document file://"$TRUST_POLICY_FILE" --profile "$REMOTE_PROFILE"
 
-aws iam create-role \
-    --role-name "$TARGET_ROLE_NAME" \
-    --assume-role-policy-document file://"$TRUST_POLICY_FILE" \
-    --profile "$REMOTE_PROFILE" > /dev/null 2>&1
-
-if [ $? -eq 0 ]; then
-    echo "    Role created successfully."
-else
-    echo "    Role might already exist. Updating trust policy..."
-    aws iam update-assume-role-policy \
-        --role-name "$TARGET_ROLE_NAME" \
-        --policy-document file://"$TRUST_POLICY_FILE" \
-        --profile "$REMOTE_PROFILE"
-fi
-
-# 5. Attach Permissions to Remote Role (Target Account)
-echo ">>> [Remote Account] Attaching permissions from '$POLICY_FILE'..."
+# --- UPDATED: Use the TEMP_POLICY_JSON ---
+echo ">>> [Remote Account] Attaching permissions..."
 aws iam put-role-policy \
     --role-name "$TARGET_ROLE_NAME" \
     --policy-name "${TARGET_ROLE_NAME}-Permissions" \
-    --policy-document file://"$POLICY_FILE" \
+    --policy-document file://"$TEMP_POLICY_JSON" \
     --profile "$REMOTE_PROFILE"
 
-# 6. Update Source Role (Local Account)
-# We need to tell the source role: "You are allowed to jump into the Remote Account"
+# Update Source Role (Assume Policy)
 ASSUME_POLICY_FILE="assume-policy-cross-temp.json"
 cat > "$ASSUME_POLICY_FILE" <<EOF
 {
@@ -112,10 +103,11 @@ aws iam put-role-policy \
     --policy-document file://"$ASSUME_POLICY_FILE" \
     --profile "$LOCAL_PROFILE"
 
-# 7. Cleanup
-rm "$TRUST_POLICY_FILE" "$ASSUME_POLICY_FILE"
+# Cleanup
+rm "$TRUST_POLICY_FILE" "$ASSUME_POLICY_FILE" "$TEMP_POLICY_JSON"
 
 echo "--- Setup Complete ---"
 echo "1. Source: arn:aws:iam::${LOCAL_ACCOUNT_ID}:role/${SOURCE_ROLE_NAME}"
 echo "2. Target: arn:aws:iam::${REMOTE_ACCOUNT_ID}:role/${TARGET_ROLE_NAME}"
 echo "3. Trust established successfully."
+

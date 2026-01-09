@@ -62,13 +62,16 @@ Create a file named `s3-policy.json` with the specific access rules:
 | `<profile>` | Your local AWS CLI profile name (e.g., `default`). |
 | `<ingext-sa-role>` | The existing role used by the Ingext application (Source). |
 | `<new_role_name>` | The name for the new role being created (Target). |
-| `<policy_file>` | Path to the JSON policy file created in Prerequisites. |
+| `<policy_file>` | Path to the JSON policy file created in Prerequisites. Set it to '-' for stdin |
 
 ### Example Command
 
 ```bash
 ./internal-role_setup.sh default ingext-sa-role IngextS3AccessRole s3-policy.json
 
+# Generate policy for 'my-internal-logs' bucket and pipe to setup
+./s3_policy_gen.sh my-internal-logs | \
+./internal-role_setup.sh default ingext-sa-role IngextInternalAccessRole -
 ```
 
 
@@ -91,13 +94,17 @@ Create a file named `s3-policy.json` with the specific access rules:
 | `<ingext-sa-role>` | The existing role used by the Ingext application. |
 | `<remote_profile>` | AWS CLI profile for the customer/target account. |
 | `<remote_role_name>` | The name for the new role to be created in the customer account. |
-| `<policy_file>` | Path to the JSON policy file. |
+| `<policy_file>` | Path to the JSON policy file. Set it to '-' for stdin |
 
 ### Example Command
 
 ```bash
 # We use 'ingext-prod' profile for our app and 'customer-dev' profile for the target
 ./external-role_setup.sh ingext-prod ingext-sa-role customer-dev IngextS3AccessRole s3-policy.json
+
+# OR use the pipe | and pass - as the last argument to the setup script.
+./s3_policy_gen.sh my-customer-data-bucket | \
+./external-role_setup.sh ingext-prod ingext-sa-role customer-dev IngextS3AccessRole -
 
 ```
 
