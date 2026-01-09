@@ -134,6 +134,10 @@ log "Phase 3: Compute - Setting up Karpenter..."
 log "Phase 4: Core Services - Installing Stack..."
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
+echo "Installing Ingest Service Account..."
+helm install ingext-serviceaccount oci://public.ecr.aws/ingext/ingext-serviceaccount \
+  --namespace "$NAMESPACE"
+
 helm upgrade --install ingext-stack oci://public.ecr.aws/ingext/ingext-stack -n "$NAMESPACE"
 helm upgrade --install etcd-single oci://public.ecr.aws/ingext/etcd-single -n "$NAMESPACE"
 helm upgrade --install etcd-single-cronjob oci://public.ecr.aws/ingext/etcd-single-cronjob -n "$NAMESPACE"
@@ -202,3 +206,14 @@ log "========================================================"
 echo "Next step: Configure your DNS A-record or CNAME to the ALB DNS name."
 kubectl get ingress -n "$NAMESPACE"
 
+
+# todo:
+# datalake/aws/create_s3_bucket.sh
+# datalake/aws/setup_ingext_serviceaccount.sh
+# datalake/aws/setup_karpenter.sh
+# ingext-merge-pool 
+# ingext-search-pool
+# ingext-lake-config chart
+# ingext-manager-role chart
+# ingext-s3-lake chart 
+# ingext-lake chart
