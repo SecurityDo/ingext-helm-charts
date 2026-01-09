@@ -27,8 +27,9 @@ STORAGE_ACCOUNT_NAME="ingext$CLUSTER_NAME" # Must be globally unique
 CONTAINER_NAME="shared-data"
 
 MANAGED_IDENTITY_NAME="ingext-$CLUSTER_NAME-identity"
-SERVICE_ACCOUNT_NAME="$CLUSTER_NAME-sa"
 NAMESPACE="ns-$CLUSTER_NAME"
+## don't change
+SERVICE_ACCOUNT_NAME="$NAMESPACE-sa"
 
 echo "-----------------------------------------------------"
 echo "DESTROYING & REBUILDING CLUSTER: $CLUSTER_NAME"
