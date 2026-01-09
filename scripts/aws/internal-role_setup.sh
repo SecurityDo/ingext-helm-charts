@@ -8,6 +8,9 @@
 #   Pipe: ./s3_gen.sh ... | ./internal-role_setup.sh <profile> <src_role> <tgt_role> -
 # ==============================================================================
 
+set -e
+set -o pipefail
+
 # 1. Input Validation
 if [ "$#" -ne 4 ]; then
     echo "Usage: $0 <profile> <source_role_name> <target_role_name> <policy_file_or_dash>"

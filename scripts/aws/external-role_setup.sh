@@ -8,6 +8,12 @@
 #   OR Pipe: ./s3_gen.sh ... | ./external-role_setup.sh external-role_setup.sh <local_profile> <ingext-sa-role> <remote_profile> <remote_role> -
 # ==============================================================================
 
+# 1. FAIL-FAST CONFIGURATION
+# set -e: Exit immediately if a command exits with a non-zero status.
+# set -o pipefail: specific for pipelines (optional but good practice)
+set -e
+set -o pipefail
+
 if [ "$#" -ne 5 ]; then
     echo "Usage: $0 <local_profile> <ingext-sa-role> <remote_profile> <remote_role> <policy_file_or_dash>"
     echo "Example: $0 ingext-prod ingext-sa-role customer-dev IngextS3AccessRole s3-policy.json"
