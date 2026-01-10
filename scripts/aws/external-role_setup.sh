@@ -69,7 +69,7 @@ cat > "$TRUST_POLICY_FILE" <<EOF
       "Principal": {
         "AWS": "arn:aws:iam::${LOCAL_ACCOUNT_ID}:role/${SOURCE_ROLE_NAME}"
       },
-      "Action": "sts:AssumeRole"
+      "Action": ["sts:AssumeRole","sts:TagSession"]
     }
   ]
 }
@@ -95,7 +95,7 @@ cat > "$ASSUME_POLICY_FILE" <<EOF
     "Statement": [
         {
             "Effect": "Allow",
-            "Action": "sts:AssumeRole",
+            "Action": ["sts:AssumeRole","sts:TagSession"],
             "Resource": "arn:aws:iam::${REMOTE_ACCOUNT_ID}:role/${TARGET_ROLE_NAME}"
         }
     ]

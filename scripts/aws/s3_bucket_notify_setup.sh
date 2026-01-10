@@ -157,6 +157,7 @@ cat <<EOF
             "Action": [
                 "sqs:ReceiveMessage",
                 "sqs:DeleteMessage",
+                "sqs:GetQueueUrl",
                 "sqs:GetQueueAttributes"
             ],
             "Resource": "${QUEUE_ARN}"
