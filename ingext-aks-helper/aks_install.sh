@@ -27,7 +27,8 @@ STORAGE_ACCOUNT_NAME="ingext$CLUSTER_NAME" # Must be globally unique
 CONTAINER_NAME="shared-data"
 
 MANAGED_IDENTITY_NAME="ingext-$CLUSTER_NAME-identity"
-NAMESPACE="ns-$CLUSTER_NAME"
+## default namespace
+NAMESPACE="ingext"
 ## don't change
 SERVICE_ACCOUNT_NAME="$NAMESPACE-sa"
 
@@ -155,6 +156,13 @@ kubectl create secret generic blob-secret \
     --from-literal=azurestorageaccountname="$STORAGE_ACCOUNT_NAME" \
     --from-literal=azurestorageaccountkey="$KEY"
 
+
+# setup token in app-secret for shell cli access
+random_str=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 15)
+#echo "$random_str"
+kubectl create secret generic app-secret \
+    --namespace "$NAMESPACE" \
+    --from-literal=token="tok_$random_str"
 
 # 8. Authenticate Helm (Important for OCI)
 echo "-> Logging into ECR Public..."

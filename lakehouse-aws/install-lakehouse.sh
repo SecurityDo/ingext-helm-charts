@@ -92,8 +92,9 @@ else
 fi
 
 log "Configuring IAM Service Account for Ingext Application..."
-IAM_ROLE_NAME="ingext_${NAMESPACE}-sa"
-IAM_POLICY_NAME="ingext_${NAMESPACE}-sa_S3_Policy"
+SA_NAME="${NAMESPACE}-sa"
+IAM_ROLE_NAME="ingext_${SA_NAME}"
+IAM_POLICY_NAME="ingext_${SA_NAME}_S3_Policy"
 
 cat <<EOT > s3_policy.json
 {
@@ -119,7 +120,7 @@ rm s3_policy.json
 eksctl create podidentityassociation \
   --cluster "$CLUSTER_NAME" \
   --namespace "$NAMESPACE" \
-  --service-account-name "${NAMESPACE}-sa" \
+  --service-account-name "${SA_NAME}" \
   --role-name "$IAM_ROLE_NAME" \
   --permission-policy-arns "$POLICY_ARN" \
   --region "$AWS_REGION" 2>/dev/null || true
@@ -137,6 +138,13 @@ kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -
 echo "Installing Ingest Service Account..."
 helm install ingext-serviceaccount oci://public.ecr.aws/ingext/ingext-serviceaccount \
   --namespace "$NAMESPACE"
+
+# setup token in app-secret for shell cli access
+random_str=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 15)
+kubectl create secret generic app-secret \
+    --namespace "$NAMESPACE" \
+    --from-literal=token="tok_$random_str"
+
 
 helm upgrade --install ingext-stack oci://public.ecr.aws/ingext/ingext-stack -n "$NAMESPACE"
 helm upgrade --install etcd-single oci://public.ecr.aws/ingext/etcd-single -n "$NAMESPACE"
