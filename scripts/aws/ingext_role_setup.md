@@ -6,9 +6,9 @@ This document outlines how to configure AWS IAM permissions for the **Ingext** a
 
 Ingext uses the **"Assume Role"** pattern to access AWS resources (like S3 buckets). This is a security best practice that decouples the application's identity from its permissions.
 
-1.  **Source Identity:** The application runs as a specific IAM role (`ingext-sa-role`).
-2.  **Target Role:** You create a specific role that holds the permissions (e.g., S3 Read/Write).
-3.  **The Handshake:** You authorize the Source Identity to "assume" (switch to) the Target Role temporarily to perform tasks.
+1. **Source Identity:** The application runs as a specific IAM role (`ingext-sa-role`).
+2. **Target Role:** You create a specific role that holds the permissions (e.g., S3 Read/Write).
+3. **The Handshake:** You authorize the Source Identity to "assume" (switch to) the Target Role temporarily to perform tasks.
 
 !
 
@@ -18,13 +18,15 @@ This setup works identically whether the resources are in the **same AWS account
 
 ## Prerequisites
 
-1.  **AWS CLI** installed (`v2` recommended).
-2.  **Bash** environment (Linux, Mac, or WSL).
-3.  **IAM Permissions:** The credentials you use to run these scripts must have administrative privileges (ability to create Roles and attach Policies).
-4.  **Policy File:** A JSON file defining the specific permissions you want to grant Ingext.
+1. **AWS CLI** installed (`v2` recommended).
+2. **Bash** environment (Linux, Mac, or WSL).
+3. **IAM Permissions:** The credentials you use to run these scripts must have administrative privileges (ability to create Roles and attach Policies).
+4. **Policy File:** A JSON file defining the specific permissions you want to grant Ingext.
 
 ### Example: `s3-policy.json`
+
 Create a file named `s3-policy.json` with the specific access rules:
+
 ```json
 {
   "Version": "2012-10-17",
@@ -74,7 +76,6 @@ Create a file named `s3-policy.json` with the specific access rules:
 ./internal-role_setup.sh default ingext-sa-role IngextInternalAccessRole -
 ```
 
-
 ## Scenario B: Cross-Account Setup
 
 *Use this when the Ingext application is in **Account A** and the S3 bucket is in **Account B** (External Customer).*
@@ -106,8 +107,12 @@ Create a file named `s3-policy.json` with the specific access rules:
 ./s3_policy_gen.sh my-customer-data-bucket | \
 ./external-role_setup.sh ingext-prod ingext-sa-role customer-dev IngextS3AccessRole -
 
-```
 
+# On a remote AWS account, configure S3 bucket with event notification, then setup role to read from ingext 
+./s3_policy_gen.sh my-customer-data-bucket | \
+./external-role_setup.sh ingext-prod ingext-sa-role customer-dev IngextS3AccessRole -
+
+```
 
 ## Validation
 
@@ -117,11 +122,8 @@ After running the appropriate script, verify the setup:
 * **Trust Relationship:** Verify it trusts `arn:aws:iam::[SOURCE-ID]:role/ingext-sa-role`.
 * **Permissions:** Verify the `s3-policy.json` contents are attached.
 
-
 2. **Source Role Check:** Go to IAM Console (Source Account) -> Roles -> `ingext-sa-role`.
 * **Permissions:** Verify there is an inline policy allowing `sts:AssumeRole` on the specific Target Role ARN.
-
-
 
 ## Next Steps for the Application
 
@@ -130,4 +132,3 @@ Once the roles are created, provide the **Target Role ARN** to the Ingext applic
 **Target Role ARN Format:**
 `arn:aws:iam::[TARGET-ACCOUNT-ID]:role/[NEW-ROLE-NAME]`
 
-```
