@@ -140,7 +140,7 @@ helm install ingext-serviceaccount oci://public.ecr.aws/ingext/ingext-serviceacc
   --namespace "$NAMESPACE"
 
 # setup token in app-secret for shell cli access
-random_str=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 15)
+random_str=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 15 || true)
 kubectl create secret generic app-secret \
     --namespace "$NAMESPACE" \
     --from-literal=token="tok_$random_str"
@@ -149,6 +149,9 @@ kubectl create secret generic app-secret \
 helm upgrade --install ingext-stack oci://public.ecr.aws/ingext/ingext-stack -n "$NAMESPACE"
 helm upgrade --install etcd-single oci://public.ecr.aws/ingext/etcd-single -n "$NAMESPACE"
 helm upgrade --install etcd-single-cronjob oci://public.ecr.aws/ingext/etcd-single-cronjob -n "$NAMESPACE"
+
+echo "Waiting 60 seconds for database services..."
+sleep 60
 
 # -------- 6. Phase 5: Application (Stream) --------
 log "Phase 5: Application - Installing Ingext Stream..."
@@ -206,7 +209,10 @@ log "Installing AWS Ingress..."
 # Assuming a local or oci chart for AWS ingress
 # This depends on how the ingext-community-ingress-aws is managed
 helm upgrade --install ingext-ingress oci://public.ecr.aws/ingext/ingext-community-ingress-aws \
-  -n "$NAMESPACE" --set "siteDomain=$SITE_DOMAIN"
+  -n "$NAMESPACE" \
+  --set siteDomain="$SITE_DOMAIN" \
+  --set certArn="$CERT_ARN" \
+  --set loadBalancerName="alb-ingext-$CLUSTER_NAME-ingress"
 
 log "========================================================"
 log "✅ Lakehouse Installation Complete!"
@@ -215,13 +221,3 @@ echo "Next step: Configure your DNS A-record or CNAME to the ALB DNS name."
 kubectl get ingress -n "$NAMESPACE"
 
 
-# todo:
-# datalake/aws/create_s3_bucket.sh
-# datalake/aws/setup_ingext_serviceaccount.sh
-# datalake/aws/setup_karpenter.sh
-# ingext-merge-pool 
-# ingext-search-pool
-# ingext-lake-config chart
-# ingext-manager-role chart
-# ingext-s3-lake chart 
-# ingext-lake chart

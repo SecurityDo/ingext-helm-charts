@@ -8,8 +8,8 @@ RESOURCE_GROUP="ingext-$CLUSTER_NAME-rg"
 LOCATION="eastus"
 
 NODE_COUNT=3
-## v6 support is tight, so we use v5
-NODE_VM_SIZE="Standard_D2ads_v5" # Supports Premium SSD v2
+## dsv6 # Supports Premium SSD v2 with default quota of 10
+NODE_VM_SIZE="Standard_D2s_v6"
 
 SITE_DOMAIN="$CLUSTER_NAME.aks.ingext.io"
 CERT_EMAIL="kun@fluencysecurity.com"
@@ -27,6 +27,7 @@ STORAGE_ACCOUNT_NAME="ingext$CLUSTER_NAME" # Must be globally unique
 CONTAINER_NAME="shared-data"
 
 MANAGED_IDENTITY_NAME="ingext-$CLUSTER_NAME-identity"
+
 ## default namespace
 NAMESPACE="ingext"
 ## don't change
@@ -158,7 +159,8 @@ kubectl create secret generic blob-secret \
 
 
 # setup token in app-secret for shell cli access
-random_str=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 15)
+echo "set app-secret..."
+random_str=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 15 || true)
 #echo "$random_str"
 kubectl create secret generic app-secret \
     --namespace "$NAMESPACE" \
