@@ -7,7 +7,7 @@ Welcome to the **ingext-community** repository. This project provides the Helm c
 For the fastest and most reliable setup, we recommend using our unified Lakehouse installers. These automated suites handle the entire process from cloud infrastructure provisioning to application deployment.
 
 *   **[AWS Lakehouse Deployment](lakehouse-aws/README.md):** A complete, unified installer for Ingext Stream and Datalake on AWS EKS, including S3, Karpenter, and ALB.
-*   **[Azure Lakehouse Deployment](ingext-aks-helper/README.md):** A comprehensive helper suite for deploying Ingext on Azure AKS with Application Gateway and automated TLS.
+*   **[Azure Lakehouse Deployment](lakehouse-azure/README.md):** A comprehensive helper suite for deploying Ingext on Azure AKS with Application Gateway and automated TLS.
 *   **[GCP Lakehouse Deployment](ingext-gke-helper/README.md):** A complete helper suite for deploying Ingext on Google Kubernetes Engine (GKE) with Google Cloud Load Balancer.
 
 ## Prerequisites
@@ -416,6 +416,9 @@ helm install ingext-community-init oci://public.ecr.aws/ingext/ingext-community-
 
 # Install the main application
 helm install ingext-community oci://public.ecr.aws/ingext/ingext-community -n ingext
+
+# The unified installers also generate an 'app-secret' with a random administrative token
+# for future CLI-based configuration.
 ```
 
 ### Check service logs

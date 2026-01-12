@@ -368,8 +368,18 @@ gcloud container clusters get-credentials "$CLUSTER_NAME" --region="$REGION" --p
 log "Create namespace: $NAMESPACE"
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
+log "Create service account: ${NAMESPACE}-sa"
+kubectl create serviceaccount "${NAMESPACE}-sa" -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+
 log "Install dependencies: Redis, OpenSearch, VictoriaMetrics"
 helm upgrade --install ingext-stack oci://public.ecr.aws/ingext/ingext-stack -n "$NAMESPACE"
+
+# setup token in app-secret for shell cli access
+random_str=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 15 || true)
+kubectl create secret generic app-secret \
+    --namespace "$NAMESPACE" \
+    --from-literal=token="tok_$random_str" \
+    --dry-run=client -o yaml | kubectl apply -f -
 
 log "Install etcd single node"
 helm upgrade --install etcd-single oci://public.ecr.aws/ingext/etcd-single -n "$NAMESPACE"

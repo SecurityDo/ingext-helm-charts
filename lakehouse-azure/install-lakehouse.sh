@@ -58,7 +58,7 @@ if ! az aks show --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" >/dev
     --generate-ssh-keys \
     --network-plugin azure \
     --enable-addons ingress-appgw \
-    --appgw-name "${CLUSTER_NAME}-agw" \
+    --appgw-name "${CLUSTER_NAME}agw" \
     --appgw-subnet-cidr "10.225.0.0/16"
 else
   log "Cluster '$CLUSTER_NAME' already exists. Skipping creation."
@@ -90,7 +90,7 @@ else
 fi
 
 log "Phase 2: Storage - Configuring Workload Identity..."
-USER_ASSIGNED_IDENTITY_NAME="ingext-${NAMESPACE}-identity"
+USER_ASSIGNED_IDENTITY_NAME="ingext${NAMESPACE}identity"
 if ! az identity show --name "$USER_ASSIGNED_IDENTITY_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
   az identity create --name "$USER_ASSIGNED_IDENTITY_NAME" --resource-group "$RESOURCE_GROUP"
 fi
@@ -106,9 +106,9 @@ az role assignment create \
 
 # Federated Credential for Service Account
 OIDC_ISSUER=$(az aks show --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" --query "oidcIssuerProfile.issuerUrl" -o tsv)
-if ! az identity federated-credential show --name "ingext-fed-cred" --identity-name "$USER_ASSIGNED_IDENTITY_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
+if ! az identity federated-credential show --name "ingextfedcred" --identity-name "$USER_ASSIGNED_IDENTITY_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
   az identity federated-credential create \
-    --name "ingext-fed-cred" \
+    --name "ingextfedcred" \
     --identity-name "$USER_ASSIGNED_IDENTITY_NAME" \
     --resource-group "$RESOURCE_GROUP" \
     --issuer "$OIDC_ISSUER" \
@@ -125,6 +125,13 @@ az acr login --name ingext --expose-token --query accessToken -o tsv | helm regi
 helm upgrade --install ingext-stack oci://public.ecr.aws/ingext/ingext-stack -n "$NAMESPACE"
 helm upgrade --install etcd-single oci://public.ecr.aws/ingext/etcd-single -n "$NAMESPACE"
 helm upgrade --install etcd-single-cronjob oci://public.ecr.aws/ingext/etcd-single-cronjob -n "$NAMESPACE"
+
+# setup token in app-secret for shell cli access
+random_str=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 15 || true)
+kubectl create secret generic app-secret \
+    --namespace "$NAMESPACE" \
+    --from-literal=token="tok_$random_str" \
+    --dry-run=client -o yaml | kubectl apply -f -
 
 # -------- 5. Phase 4: Application (Stream) --------
 log "Phase 5: Application - Installing Ingext Stream..."

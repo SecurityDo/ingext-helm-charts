@@ -16,6 +16,7 @@ OUTPUT_ENV="${OUTPUT_ENV:-./lakehouse-aws.env}"
 need() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "ERROR: missing dependency: $1"
+    echo "💡 TIP: Run './start-docker-shell.sh' to launch a pre-configured toolbox with all dependencies installed."
     exit 1
   }
 }
@@ -59,6 +60,7 @@ echo "Checking available AWS configuration..."
 if [[ -n "${AWS_ACCESS_KEY_ID:-}" ]]; then
   echo "✅ Detected AWS credentials in environment variables."
   SELECTED_PROFILE="environment"
+  AWS_PROFILE="default" # Placeholder
 else
   PROFILES=$(aws configure list-profiles 2>/dev/null || echo "")
   if [[ -n "$PROFILES" ]]; then
@@ -98,7 +100,7 @@ if ! aws sts get-caller-identity >/dev/null 2>&1; then
       echo "--------------------------------------------------------"
       echo ""
       read -rp "Ready to run 'aws configure sso'? (y/N): " RUN_SSO_CONFIG
-      if [[ "${RUN_SSO_CONFIG,,}" =~ ^[Yy]$ ]]; then
+      if [[ "$RUN_SSO_CONFIG" =~ ^[Yy]$ ]]; then
         aws configure sso
       else
         echo "Exiting. Please configure SSO or use Access Keys."
@@ -132,11 +134,12 @@ fi
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 echo "Authenticated as AWS Account: $ACCOUNT_ID using profile: $AWS_PROFILE"
 
-# 2) Prompt for remaining inputs
+# Helper for prompts with defaults
 prompt() {
   local var_name="$1"
   local label="$2"
   local default="${3:-}"
+  local sanitize="${4:-false}"
   local val=""
   # Skip AWS_PROFILE since we already got it
   if [[ "$var_name" == "AWS_PROFILE" ]]; then
@@ -148,15 +151,28 @@ prompt() {
   else
     read -rp "$label: " val
   fi
+
+  if [[ "$sanitize" == "true" ]]; then
+    # Lowercase and digits only
+    val=$(echo "$val" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')
+  fi
+
   printf -v "$var_name" "%s" "$val"
 }
 
 # Remove AWS_PROFILE from prompt list below
 prompt AWS_REGION "AWS Region" "us-east-1"
-prompt CLUSTER_NAME "EKS Cluster Name" "ingext-lakehouse"
-prompt S3_BUCKET "S3 Bucket Name (for Datalake)" "ingext-datalake-$ACCOUNT_ID"
+prompt CLUSTER_NAME "EKS Cluster Name" "ingext-lakehouse" "true"
+prompt S3_BUCKET "S3 Bucket Name (for Datalake)" "ingext-datalake-$ACCOUNT_ID" "true"
 prompt SITE_DOMAIN "Public Domain (e.g. ingext.example.com)" ""
-prompt NAMESPACE "Kubernetes Namespace" "ingext"
+prompt NAMESPACE "Kubernetes Namespace" "ingext" "true"
+prompt CERT_ARN "ACM Certificate ARN [Required for HTTPS]" ""
+
+# Validate CERT_ARN is not empty
+if [[ -z "$CERT_ARN" ]]; then
+  echo "⚠️  WARNING: CERT_ARN is empty. Ingress installation will fail."
+  echo "   Please run preflight again or manually set CERT_ARN in $OUTPUT_ENV."
+fi
 
 # Node preferences (AMD EPYC preference)
 echo ""
@@ -207,6 +223,7 @@ export CLUSTER_NAME="$CLUSTER_NAME"
 export S3_BUCKET="$S3_BUCKET"
 export SITE_DOMAIN="$SITE_DOMAIN"
 export NAMESPACE="$NAMESPACE"
+export CERT_ARN="$CERT_ARN"
 export NODE_TYPE="$NODE_TYPE"
 export NODE_COUNT="$NODE_COUNT"
 export ACCOUNT_ID="$ACCOUNT_ID"

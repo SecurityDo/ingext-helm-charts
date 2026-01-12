@@ -141,8 +141,9 @@ If you prefer not to use the `.env` file, you can pass arguments directly:
 1. Creates a GKE regional cluster with VPC-native networking
 2. Installs all dependencies (Redis, OpenSearch, VictoriaMetrics, etcd)
 3. Deploys Ingext components
-4. Sets up cert-manager and ingress
-5. Displays the ingress public IP for DNS configuration
+4. Generates a random administrative token and saves it to a Kubernetes secret (`app-secret`) for future CLI access.
+5. Sets up cert-manager and ingress
+6. Displays the ingress public IP for DNS configuration
 
 ### Step 3: Check Installation Status
 

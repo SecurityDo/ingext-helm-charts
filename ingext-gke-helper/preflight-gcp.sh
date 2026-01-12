@@ -19,6 +19,7 @@ OUTPUT_ENV="${OUTPUT_ENV:-./ingext-gke.env}"
 need() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "ERROR: missing dependency: $1"
+    echo "💡 TIP: Run '../ingext-gcp-shell.sh' from the root to launch a pre-configured toolbox with all dependencies installed."
     exit 1
   }
 }
@@ -212,6 +213,7 @@ prompt() {
   local var_name="$1"
   local label="$2"
   local default="${3:-}"
+  local sanitize="${4:-false}"
   local val=""
   if [[ -n "$default" ]]; then
     read -rp "$label [$default]: " val
@@ -219,12 +221,18 @@ prompt() {
   else
     read -rp "$label: " val
   fi
+
+  if [[ "$sanitize" == "true" ]]; then
+    # Lowercase and digits only
+    val=$(echo "$val" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')
+  fi
+
   printf -v "$var_name" "%s" "$val"
 }
 
 # 2) Collect inputs
 prompt REGION "GCP region (example: us-east1, us-west1, europe-west1)" "us-east1"
-prompt CLUSTER_NAME "GKE cluster name" "ingext-gke"
+prompt CLUSTER_NAME "GKE cluster name" "ingextgke" "true"
 prompt NODE_COUNT "Node count per zone (regional cluster)" "2"
 
 # Machine Type selection - show available types automatically
@@ -335,7 +343,7 @@ read -rp "Machine type [$DEFAULT_MACHINE_TYPE]: " MACHINE_TYPE_INPUT
 MACHINE_TYPE="${MACHINE_TYPE_INPUT:-$DEFAULT_MACHINE_TYPE}"
 
 prompt DISK_SIZE "Boot disk size in GB per node (default: 20, GKE default is 100)" "20"
-prompt NAMESPACE "Kubernetes namespace" "ingext"
+prompt NAMESPACE "Kubernetes namespace" "ingext" "true"
 prompt SITE_DOMAIN "Public domain for Ingext (example: ingext.example.com)" ""
 prompt CERT_EMAIL "Email for certificate issuer" ""
 

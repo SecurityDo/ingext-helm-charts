@@ -18,7 +18,7 @@ The Lakehouse installer provides a seamless setup experience, combining:
    ```bash
    ./preflight-lakehouse.sh
    ```
-2. **Install**: Deploy the entire Lakehouse stack.
+2. **Install**: Deploy the entire Lakehouse stack. The installer will also generate a random administrative token and save it to a Kubernetes secret (`app-secret`) for future CLI access.
    ```bash
    source lakehouse-azure.env
    ./install-lakehouse.sh

@@ -16,6 +16,7 @@ OUTPUT_ENV="${OUTPUT_ENV:-./lakehouse-azure.env}"
 need() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "ERROR: missing dependency: $1"
+    echo "💡 TIP: Run './start-docker-shell.sh' to launch a pre-configured toolbox with all dependencies installed."
     exit 1
   }
 }
@@ -72,7 +73,7 @@ CURRENT_SUB_NAME="$(az account show --query name -o tsv 2>/dev/null || true)"
 
 echo "Currently active subscription: $CURRENT_SUB_NAME ($CURRENT_SUB_ID)"
 read -rp "Use this subscription? (Y/n): " USE_CURRENT
-if [[ "${USE_CURRENT,,}" == "n" ]]; then
+if [[ "$USE_CURRENT" == "n" || "$USE_CURRENT" == "N" ]]; then
   read -rp "Enter subscription name or ID to switch to: " TARGET_SUB
   if [[ -n "$TARGET_SUB" ]]; then
     az account set --subscription "$TARGET_SUB" || { echo "ERROR: Failed to set subscription."; exit 1; }
@@ -87,6 +88,7 @@ prompt() {
   local var_name="$1"
   local label="$2"
   local default="${3:-}"
+  local sanitize="${4:-false}"
   local val=""
   if [[ -n "$default" ]]; then
     read -rp "$label [$default]: " val
@@ -94,28 +96,34 @@ prompt() {
   else
     read -rp "$label: " val
   fi
+
+  if [[ "$sanitize" == "true" ]]; then
+    # Lowercase and digits only
+    val=$(echo "$val" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')
+  fi
+
   printf -v "$var_name" "%s" "$val"
 }
 
 prompt LOCATION "Azure Region" "eastus"
-prompt RESOURCE_GROUP "Resource Group Name" "ingext-lakehouse-rg"
-prompt CLUSTER_NAME "AKS Cluster Name" "ingext-lakehouse"
+prompt RESOURCE_GROUP "Resource Group Name" "ingext-lakehouse-rg" "true"
+prompt CLUSTER_NAME "AKS Cluster Name" "ingext-lakehouse" "true"
 
 # Storage Account naming: 3-24 characters, lowercase letters and numbers only.
 DEFAULT_STORAGE_ACCOUNT="ingextlake$(echo "$SUB_ID" | tr -d '-' | head -c 8)"
-prompt STORAGE_ACCOUNT "Storage Account Name (for Datalake)" "$DEFAULT_STORAGE_ACCOUNT"
-prompt STORAGE_CONTAINER "Blob Container Name" "datalake"
+prompt STORAGE_ACCOUNT "Storage Account Name (for Datalake)" "$DEFAULT_STORAGE_ACCOUNT" "true"
+prompt STORAGE_CONTAINER "Blob Container Name" "datalake" "true"
 
 prompt SITE_DOMAIN "Public Domain (e.g. ingext.example.com)" ""
 prompt CERT_EMAIL "Email for TLS certificate (Let's Encrypt)" ""
-prompt NAMESPACE "Kubernetes Namespace" "ingext"
+prompt NAMESPACE "Kubernetes Namespace" "ingext" "true"
 
 # Node preferences
 echo ""
 echo "Instance Recommendations:"
+echo "  - Standard_D2s_v6 (Intel, 2 vCPU, 8GB)      - Cheap, no extra quota needed"
 echo "  - Standard_D4as_v5 (AMD EPYC, 4 vCPU, 16GB) - Recommended"
-echo "  - Standard_D2as_v5 (AMD EPYC, 2 vCPU, 8GB)  - Cost-effective"
-prompt NODE_VM_SIZE "AKS Node VM Size" "Standard_D4as_v5"
+prompt NODE_VM_SIZE "AKS Node VM Size" "Standard_D2s_v6"
 prompt NODE_COUNT "Initial Node Count" "3"
 
 # 3) Technical Checks
@@ -158,7 +166,7 @@ echo ""
 if [[ -f "$OUTPUT_ENV" ]]; then
   echo "WARNING: $OUTPUT_ENV already exists."
   read -rp "Overwrite? (y/N): " CONFIRM_OVERWRITE
-  if [[ ! "${CONFIRM_OVERWRITE,,}" =~ ^[Yy]$ ]]; then
+  if [[ ! "$CONFIRM_OVERWRITE" =~ ^[Yy]$ ]]; then
     echo "Cancelled."
     exit 2
   fi

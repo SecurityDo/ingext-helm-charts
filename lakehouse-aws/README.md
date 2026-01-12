@@ -16,11 +16,12 @@ The Lakehouse installer provides a seamless setup experience, combining:
    ```
 1. **Pre-configuration (SSL)**: Request your SSL certificate in AWS Certificate Manager.
    - See [ACM Setup Guide](ACM_SETUP.md) for detailed instructions.
-2. **Preflight**: Run the interactive wizard to verify your AWS environment and generate a configuration file.
+   - **Keep your Certificate ARN handy**; you will need it for the preflight wizard.
+2. **Preflight**: Run the interactive wizard to verify your AWS environment. This will prompt you for your domain, namespace, and **Certificate ARN**.
    ```bash
    ./preflight-lakehouse.sh
    ```
-3. **Install**: Deploy the entire Lakehouse stack.
+3. **Install**: Deploy the entire Lakehouse stack. The installer will also generate a random administrative token and save it to a Kubernetes secret (`app-secret`).
    ```bash
    source lakehouse-aws.env
    ./install-lakehouse.sh
