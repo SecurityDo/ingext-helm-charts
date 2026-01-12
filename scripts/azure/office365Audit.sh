@@ -64,6 +64,12 @@ do
     az ad app permission add --id $APP_ID --api $O365_API_GUID --api-permissions "$ROLE_ID=Role"
 done
 
+# We must wait for the permission updates (step 3) to actually apply 
+# before we try to grant them (step 5).
+echo "Waiting 30s for permissions to apply..."
+sleep 30
+
+
 # 5. Grant Admin Consent (Grants ALL added permissions at once)
 echo "Granting Admin Consent for all permissions..."
 az ad app permission admin-consent --id $APP_ID
