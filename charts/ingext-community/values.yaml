@@ -1,2 +1,7 @@
 podLabels: {}
 k8sProvider: "aws"
+
+
+ingextRemoteVersion: "1.1.0"
+ingextPlatformVersion: "1.1.0"
+fluency8Version: "1.1.0"

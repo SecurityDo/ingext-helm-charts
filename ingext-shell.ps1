@@ -6,6 +6,7 @@ if (-not (Test-Path "$HomeDir\.kube"))  { New-Item -ItemType Directory -Path "$H
 if (-not (Test-Path "$HomeDir\.aws"))   { New-Item -ItemType Directory -Path "$HomeDir\.aws" | Out-Null }
 if (-not (Test-Path "$HomeDir\.azure")) { New-Item -ItemType Directory -Path "$HomeDir\.azure" | Out-Null }
 if (-not (Test-Path "$HomeDir\.ssh"))   { New-Item -ItemType Directory -Path "$HomeDir\.ssh" | Out-Null }
+if (-not (Test-Path "$HomeDir\.ingext"))   { New-Item -ItemType Directory -Path "$HomeDir\.ingext" | Out-Null }
 if (-not (Test-Path "$HomeDir\.helm"))  { New-Item -ItemType Directory -Path "$HomeDir\.helm" | Out-Null } # <--- Added
 
 # 1. Create the history file if it doesn't exist
@@ -19,6 +20,7 @@ docker run -it --rm --pull always `
   -v "${HomeDir}\.aws:/root/.aws" `
   -v "${HomeDir}\.azure:/root/.azure" `
   -v "${HomeDir}\.helm:/root/.helm" `
+  -v "${HomeDir}\.ingext:/root/.ingext" `
   -v "${HomeDir}\.ingext_shell_history:/root/.bash_history" `
   -v "${HomeDir}\.ssh:/root/.ssh:ro" `
   -w "/workspace" `

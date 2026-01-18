@@ -1,7 +1,7 @@
-lakeMgrVersion: latest
-searchServiceVersion: latest
-lakeWorkerVersion: latest
-lakeSearchVersion: latest
+lakeMgrVersion: "1.1.0"
+searchServiceVersion: "1.1.0"
+lakeWorkerVersion: "1.1.0"
+lakeSearchVersion: "1.1.0"
 
 podLabels: {}
 # azure.workload.identity/use: "true"

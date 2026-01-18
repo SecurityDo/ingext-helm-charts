@@ -10,6 +10,7 @@ mkdir -p "$HOME/.aws"
 mkdir -p "$HOME/.azure"
 mkdir -p "$HOME/.ssh"
 mkdir -p "$HOME/.helm"
+mkdir -p "$HOME/.ingext"
 
 # 1. Create the history file if it doesn't exist
 touch "$HOME/.ingext_shell_history"
@@ -28,6 +29,7 @@ docker run -it --rm --pull always \
   -v "$HOME/.aws:/root/.aws" \
   -v "$HOME/.azure:/root/.azure" \
   -v "$HOME/.helm:/root/.helm" \
+  -v "$HOME/.ingext:/root/.ingext" \
   -v "$HOME/.ingext_shell_history:/root/.bash_history" \
   -v "$HOME/.ssh:/root/.ssh:ro" \
   -w /workspace \

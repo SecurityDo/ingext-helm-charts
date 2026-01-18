@@ -63,7 +63,7 @@ spec:
       containers:
       ## This example only has this etcd container.
       - name: "platform-service"
-        image: "public.ecr.aws/ingext/ingext_platform:latest"
+        image: "public.ecr.aws/ingext/ingext_platform:{{ .Values.ingextPlatformVersion }}"
         imagePullPolicy: Always
         ports:
         - name: platform

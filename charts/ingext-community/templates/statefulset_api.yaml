@@ -63,7 +63,7 @@ spec:
       containers:
       ## This example only has this etcd container.
       - name: "ingext-remote"
-        image: "public.ecr.aws/ingext/ingext_remote:latest"
+        image: "public.ecr.aws/ingext/ingext_remote:{{ .Values.ingextRemoteVersion }}"
         imagePullPolicy: Always
         ports:
         - name: ingext-api
