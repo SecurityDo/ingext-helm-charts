@@ -7,6 +7,7 @@ IMAGE_NAME="public.ecr.aws/ingext/ingext-shell:latest"
 # If we don't, Docker creates them as 'root' owned, which causes permission errors.
 mkdir -p "$HOME/.kube"
 mkdir -p "$HOME/.aws"
+mkdir -p "$HOME/.config/gcloud"
 mkdir -p "$HOME/.azure"
 mkdir -p "$HOME/.ssh"
 mkdir -p "$HOME/.helm"
@@ -27,6 +28,7 @@ docker run -it --rm --pull always \
   -v "$(pwd):/workspace" \
   -v "$HOME/.kube:/root/.kube" \
   -v "$HOME/.aws:/root/.aws" \
+  -v "$HOME/.config/gcloud:/root/.config/gcloud" \
   -v "$HOME/.azure:/root/.azure" \
   -v "$HOME/.helm:/root/.helm" \
   -v "$HOME/.ingext:/root/.ingext" \
