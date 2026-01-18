@@ -55,8 +55,8 @@ else
   log "Cluster '$CLUSTER_NAME' already exists. Skipping creation."
 fi
 
-aws eks update-kubeconfig --region "$AWS_REGION" --name "$CLUSTER_NAME"
-
+aws eks update-kubeconfig --region "$AWS_REGION" --name "$CLUSTER_NAME" --alias "$CLUSTER_NAME"
+#ingext config set --cluster "$CLUSTER_NAME" --context "$CLUSTER_NAME" --provider eks --namespace $NAMESPACE 
 log "Installing/Updating Foundation Add-ons..."
 eksctl create addon --cluster "$CLUSTER_NAME" --name eks-pod-identity-agent --region "$AWS_REGION" 2>/dev/null || true
 
@@ -168,10 +168,10 @@ helm upgrade --install ingext-lake-config oci://public.ecr.aws/ingext/ingext-lak
 
 # Node Pools via Karpenter (via EKS-Pool chart)
 helm upgrade --install ingext-merge-pool oci://public.ecr.aws/ingext/ingext-eks-pool \
-  --set poolName=poolmerge --set clusterName="$CLUSTER_NAME"
+  --set poolName=pool-merge --set clusterName="$CLUSTER_NAME"
 
 helm upgrade --install ingext-search-pool oci://public.ecr.aws/ingext/ingext-eks-pool \
-  --set poolName=poolsearch --set clusterName="$CLUSTER_NAME" --set cpuLimit=128 --set memoryLimit=512Gi
+  --set poolName=pool-search --set clusterName="$CLUSTER_NAME" --set cpuLimit=128 --set memoryLimit=512Gi
 
 helm upgrade --install ingext-manager-role oci://public.ecr.aws/ingext/ingext-manager-role -n "$NAMESPACE"
 helm upgrade --install ingext-s3-lake oci://public.ecr.aws/ingext/ingext-s3-lake -n "$NAMESPACE" \
@@ -220,4 +220,4 @@ log "========================================================"
 echo "Next step: Configure your DNS A-record or CNAME to the ALB DNS name."
 kubectl get ingress -n "$NAMESPACE"
 
-
+ingext config set --cluster "$CLUSTER_NAME" --context "$CLUSTER_NAME" --provider eks --namespace $NAMESPACE
