@@ -2,6 +2,8 @@
 
 ## Configuration after installation
 
+### ingext cli: [API and Usage](https://https://github.com/SecurityDo/ingext_api/)
+
 ### Add user with admin role
 
 ```bash
