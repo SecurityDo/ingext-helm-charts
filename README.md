@@ -61,7 +61,7 @@ This README focuses on deployment. For building and using Ingext, visit our [Off
 
 ---
 
-## First Steps After Login
+## First Steps After Login [configuration with ingext cli](configuration.md)
 
 1.  **Access the Console**: Navigate to your configured domain.
 2.  **Login**:
