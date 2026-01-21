@@ -124,6 +124,8 @@ ingext application install --app AzureEventHubs \
 
 ### setup service account
 
+Run "gcloud auth login" in the cloud-shell
+
 **`scripts/gcloud/gSuiteAuditSetup.sh`**
 
 This script will:
