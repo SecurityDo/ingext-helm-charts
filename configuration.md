@@ -122,6 +122,17 @@ ingext application install --app AzureEventHubs \
 
 ## Add GSuite audit event source
 
+### setup service account
+
+**`scripts/gcloud/gSuiteAuditSetup.sh`**
+
+This script will:
+
+1. Create a new Google Cloud Project.
+2. Enable the Admin SDK API.
+3. Create a Service Account.
+4. Generate and download the JSON key file (which serves as the "secret").
+
 ### add AzureEventHubs integration entry with a datasource
 
 ```bash
