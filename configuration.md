@@ -73,7 +73,71 @@ ingext stream connect-router --router-id $routerID --source-id $srcID
 ```bash
 ingext application install --app Office365 \
   --instance $name \
-  --set TenantID="$tenantID" \
-  --set ClientID="$clientId" \
-  --set ClientSecret="$clientSecret"
+  --set tenantID="$tenantID" \
+  --set clientId="$clientId" \
+  --set clientSecret="$clientSecret"
 ```
+
+## Add AzureEventHubs event source
+
+### setup consumer group for an existing AzureEventHubs
+
+```bash
+scripts/azure/azureEventHubsReader.sh 
+# collect EH_CONN_STR, STORAGE_CONN_STR, CONTAINER_NAME and CONSUMER_GROUP from the console output
+```
+
+### add AzureEventHubs integration entry
+
+```bash
+ingext integration add \
+  --name $name \
+  --integration AzureEventHubs\
+  --config endpoint="$EH_CONN_STR" \
+  --config storageEndpoint="$STORAGE_CONN_STR" \
+  --config containerName="$CONTAINER_NAME" \
+  --config consumerGroup="$CONSUMER_GROUP"
+# collect integrationID
+```
+
+### add datasource and router
+
+```bash
+ingext stream add-source --integration-id $integrationID --name $name --source-type plugin
+# collect sourceID
+ingext stream add-router --processor AzureEventHubs_Adjustments
+ingext stream connect-router --router-id $routerID --source-id $srcID
+```
+
+### OR install the full pipeline with application template
+
+```bash
+ingext application install --app AzureEventHubs \
+  --instance $name \
+  --set endpoint="$EH_CONN_STR" \
+  --set storageEndpoint="$STORAGE_CONN_STR" \
+  --set containerName="$CONTAINER_NAME" \
+  --set consumerGroup="$CONSUMER_GROUP"
+```
+
+## Add GSuite audit event source
+
+### add AzureEventHubs integration entry with a datasource
+
+```bash
+ingext integration add \
+  --name $name \
+  --integration GSuite \
+  --config adminUserEmail="$adminUserEmail" \
+  --secret serviceAccountKey="@ingext-reader-key.json" \
+  --add-source
+```
+
+### OR install the full pipeline with application template
+
+```bash
+ingext application install \
+  --app GSuite \
+  --instance SecurityDoAccount2 \
+  --set adminUserEmail="$adminUserEmail" \
+  --set serviceAccountKey="@ingext-reader-key.json"
