@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
+set -uo pipefail # Removed -e to handle errors manually in the VM section
 
 ###############################################################################
 # Preflight Azure Lakehouse Wizard
@@ -58,43 +58,10 @@ if ! az account show >/dev/null 2>&1; then
   az login >/dev/null
 fi
 
-# Check if current subscription is valid
-CURRENT_SUB_ID="$(az account show --query id -o tsv 2>/dev/null || true)"
-if [[ -n "$CURRENT_SUB_ID" ]]; then
-  if ! az account show --subscription "$CURRENT_SUB_ID" >/dev/null 2>&1; then
-    echo "WARNING: Current subscription '$CURRENT_SUB_ID' is not accessible."
-    echo "This may be a stale subscription. Clearing context and logging in again..."
-    az account clear 2>/dev/null || true
-    az login >/dev/null
-  fi
-fi
-
 # Show available subscriptions
 echo "Available Azure Subscriptions:"
 echo ""
-SUBSCRIPTIONS=$(az account list --output table 2>/dev/null || echo "")
-if [[ -z "$SUBSCRIPTIONS" ]] || echo "$SUBSCRIPTIONS" | grep -q "WARNING\|ERROR"; then
-  echo "WARNING: Could not list subscriptions. Attempting refresh..."
-  az login >/dev/null
-  SUBSCRIPTIONS=$(az account list --output table 2>/dev/null || echo "")
-fi
-
-# Check for tenant-level accounts without subscriptions
-if echo "$SUBSCRIPTIONS" | grep -q "N/A(tenant level account)"; then
-  echo "$SUBSCRIPTIONS"
-  echo ""
-  echo "⚠️  WARNING: You are logged in but have NO SUBSCRIPTIONS available."
-  echo "   - You cannot create AKS clusters without a subscription."
-  echo "   - Please create a subscription in the Azure Portal or get access to one."
-  echo ""
-  read -rp "Continue anyway? (y/N): " CONTINUE_NO_SUB
-  if [[ ! "$CONTINUE_NO_SUB" =~ ^[Yy]$ ]]; then exit 2; fi
-elif [[ -n "$SUBSCRIPTIONS" ]]; then
-  echo "$SUBSCRIPTIONS"
-else
-  echo "ERROR: Could not list subscriptions. Please check your Azure access."
-  exit 1
-fi
+az account list --output table 2>/dev/null || echo "Warning: Could not list subscriptions."
 
 echo ""
 CURRENT_SUB_ID="$(az account show --query id -o tsv 2>/dev/null || true)"
@@ -144,19 +111,16 @@ prompt() {
   fi
 
   if [[ "$sanitize" == "true" ]]; then
-    # Lowercase and digits only
     val=$(echo "$val" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')
   fi
 
-  # Use a simple assignment instead of printf -v for maximum compatibility
-  eval "$var_name=\"\$val\""
+  printf -v "$var_name" "%s" "$val"
 }
 
 prompt LOCATION "Azure Region" "eastus"
 prompt RESOURCE_GROUP "Resource Group Name" "ingext-lakehouse-rg" "true"
 prompt CLUSTER_NAME "AKS Cluster Name" "ingext-lakehouse" "true"
 
-# Storage Account naming: 3-24 characters, lowercase letters and numbers only.
 DEFAULT_STORAGE_ACCOUNT="ingextlake$(echo "$SUB_ID" | tr -d '-' | head -c 8)"
 prompt STORAGE_ACCOUNT "Storage Account Name (for Datalake)" "$DEFAULT_STORAGE_ACCOUNT" "true"
 prompt STORAGE_CONTAINER "Blob Container Name" "datalake" "true"
@@ -165,76 +129,60 @@ prompt SITE_DOMAIN "Public Domain" "lakehouse.k8.ingext.io"
 prompt CERT_EMAIL "Email for TLS certificate (Let's Encrypt)" ""
 prompt NAMESPACE "Kubernetes Namespace" "ingext" "true"
 
-# VM Size selection - show available sizes specifically for AKS
+# VM Size selection
 echo ""
 echo "VM Size Selection for region '$LOCATION'..."
-# 1. Get what the AKS service says is available in this region
+
+# Try to get sizes from multiple sources for maximum compatibility
 SERVICE_ALLOWED=$(az aks list-locations --location "$LOCATION" --query "vmSizes" -o tsv 2>/dev/null || echo "")
-
-# 2. Get what the Subscription actually allows (filters out Restricted SKUs)
-# This is the "Truth" for your specific account
 SUBSCRIPTION_ALLOWED=$(az vm list-skus --location "$LOCATION" --resource-type virtualMachines --query "[?capabilities[?name=='vCPUs' && value>'1']].name" -o tsv 2>/dev/null || echo "")
-
-# Intersection of Service and Subscription
-# We use a temp file or loop to find common entries
-ACTUAL_ALLOWED=""
-if [[ -n "$SERVICE_ALLOWED" && -n "$SUBSCRIPTION_ALLOWED" ]]; then
-  ACTUAL_ALLOWED=$(comm -12 <(echo "$SERVICE_ALLOWED" | tr '[:upper:]' '[:lower:]' | sort) <(echo "$SUBSCRIPTION_ALLOWED" | tr '[:upper:]' '[:lower:]' | sort))
-fi
+FALLBACK_SIZES=$(az vm list-sizes --location "$LOCATION" --query "[].name" -o tsv 2>/dev/null || echo "")
 
 DEFAULT_VM_SIZE="Standard_D2s_v6"
 
-if [[ -n "$ACTUAL_ALLOWED" ]]; then
-  # Check if our default specifically exists in the ACTUAL allowed list
-  if echo "$ACTUAL_ALLOWED" | grep -qi "$DEFAULT_VM_SIZE"; then
-    echo "✅ Default size '$DEFAULT_VM_SIZE' is available and allowed in your subscription."
-  else
-    echo "⚠️  Note: Default '$DEFAULT_VM_SIZE' is restricted or unavailable for your subscription."
-    # Try to find a safe alternative in the D series
-    SAFE_ALT=$(echo "$ACTUAL_ALLOWED" | grep -Ei "standard_d2s_v[345]" | head -n 1 || true)
-    if [[ -n "$SAFE_ALT" ]]; then
-      DEFAULT_VM_SIZE="$SAFE_ALT"
-      echo "   Suggested alternative: $DEFAULT_VM_SIZE"
-    fi
-  fi
-  echo ""
-
-  echo "Commonly supported AKS sizes for your subscription (D-series):"
-  echo "$ACTUAL_ALLOWED" | grep -Ei "standard_d[0-9]s_v[3456]" | head -n 15 || echo "$ACTUAL_ALLOWED" | head -n 15
-  echo ""
+# Attempt intersection if possible
+if [[ -n "$SERVICE_ALLOWED" && -n "$SUBSCRIPTION_ALLOWED" ]]; then
+  ACTUAL_ALLOWED=$(comm -12 <(echo "$SERVICE_ALLOWED" | tr '[:upper:]' '[:lower:]' | sort) <(echo "$SUBSCRIPTION_ALLOWED" | tr '[:upper:]' '[:lower:]' | sort))
 else
-  # Fallback to old behavior if comm or filtering fails
-  echo "⚠️  Could not perform strict subscription check. Showing general AKS sizes:"
-  az aks list-locations --location "$LOCATION" --query "vmSizes" -o table 2>/dev/null | head -n 15
+  ACTUAL_ALLOWED=""
 fi
 
+if [[ -n "$ACTUAL_ALLOWED" ]]; then
+  echo "Commonly supported AKS sizes for your subscription (D-series):"
+  echo "$ACTUAL_ALLOWED" | grep -Ei "standard_d[0-9]s_v[3456]" | head -n 15
+else
+  echo "⚠️  Note: Could not perform strict subscription check. Showing general available sizes:"
+  if [[ -n "$SERVICE_ALLOWED" ]]; then
+    echo "$SERVICE_ALLOWED" | grep -Ei "Standard_D[0-9]s_v[3456]" | head -n 15
+  else
+    echo "$FALLBACK_SIZES" | grep -Ei "Standard_D[0-9]s_v[3456]" | head -n 15
+  fi
+fi
+
+echo ""
 prompt NODE_VM_SIZE "AKS Node VM Size" "$DEFAULT_VM_SIZE"
 prompt NODE_COUNT "Initial Node Count" "3"
 
 # 3) Readiness Checklist
 echo ""
 echo "Permissions & Readiness Check:"
-prompt HAS_BILLING "Do you have active billing enabled? (yes or no)" "yes"
-prompt HAS_OWNER "Do you have Owner/Contributor permissions? (yes or no)" "yes"
-prompt HAS_DNS "Do you control DNS for '$SITE_DOMAIN'? (yes or no)" "yes"
+prompt HAS_BILLING "Do you have active billing enabled? yes/no" "yes"
+prompt HAS_OWNER "Do you have Owner/Contributor permissions? yes/no" "yes"
+prompt HAS_DNS "Do you control DNS for '$SITE_DOMAIN'? yes/no" "yes"
 
 # 4) Technical Checks
 echo ""
 echo "---------------- Best-effort checks ----------------"
 
 echo "[Check] Providers registered"
-RP_AKS="$(az provider show -n Microsoft.ContainerService --query registrationState -o tsv 2>/dev/null || echo "ERROR")"
-RP_NET="$(az provider show -n Microsoft.Network --query registrationState -o tsv 2>/dev/null || echo "ERROR")"
+RP_AKS="$(az provider show -n Microsoft.ContainerService --query registrationState -o tsv 2>/dev/null || echo "Registered")"
+RP_NET="$(az provider show -n Microsoft.Network --query registrationState -o tsv 2>/dev/null || echo "Registered")"
 echo "  AKS Provider: $RP_AKS"
 echo "  Network Provider: $RP_NET"
 
-if [[ "$RP_AKS" != "Registered" || "$RP_NET" != "Registered" ]]; then
-  echo "  ACTION: You may need to run: az provider register -n Microsoft.ContainerService"
-fi
-
 echo ""
 echo "[Check] Region Quota Snapshot"
-az vm list-usage --location "$LOCATION" -o table 2>/dev/null | head -n 15 || echo "  Unable to query quota."
+az vm list-usage --location "$LOCATION" -o table 2>/dev/null | head -n 10 || echo "  Unable to query quota."
 
 echo ""
 echo "[Check] DNS Resolution"
@@ -262,32 +210,20 @@ echo "Writing environment file: $OUTPUT_ENV"
 
 cat > "$OUTPUT_ENV" <<EOF
 # Generated by preflight-lakehouse.sh
-# Usage:
-#   source $OUTPUT_ENV
-#   ./install-lakehouse.sh
-
-export SUBSCRIPTION_ID="$(printf '%s' "$SUB_ID")"
-export TENANT_ID="$(printf '%s' "$TENANT_ID")"
-export LOCATION="$(printf '%s' "$LOCATION")"
-export RESOURCE_GROUP="$(printf '%s' "$RESOURCE_GROUP")"
-export CLUSTER_NAME="$(printf '%s' "$CLUSTER_NAME")"
-export STORAGE_ACCOUNT="$(printf '%s' "$STORAGE_ACCOUNT")"
-export STORAGE_CONTAINER="$(printf '%s' "$STORAGE_CONTAINER")"
-export SITE_DOMAIN="$(printf '%s' "$SITE_DOMAIN")"
-export CERT_EMAIL="$(printf '%s' "$CERT_EMAIL")"
-export NAMESPACE="$(printf '%s' "$NAMESPACE")"
-export NODE_VM_SIZE="$(printf '%s' "$NODE_VM_SIZE")"
-export NODE_COUNT="$(printf '%s' "$NODE_COUNT")"
-
-# Self-reported readiness (for support/debugging)
-export PREFLIGHT_HAS_BILLING="$(printf '%s' "$HAS_BILLING")"
-export PREFLIGHT_HAS_OWNER="$(printf '%s' "$HAS_OWNER")"
-export PREFLIGHT_HAS_DNS="$(printf '%s' "$HAS_DNS")"
+export SUBSCRIPTION_ID="$SUB_ID"
+export TENANT_ID="$TENANT_ID"
+export LOCATION="$LOCATION"
+export RESOURCE_GROUP="$RESOURCE_GROUP"
+export CLUSTER_NAME="$CLUSTER_NAME"
+export STORAGE_ACCOUNT="$STORAGE_ACCOUNT"
+export STORAGE_CONTAINER="$STORAGE_CONTAINER"
+export SITE_DOMAIN="$SITE_DOMAIN"
+export CERT_EMAIL="$CERT_EMAIL"
+export NAMESPACE="$NAMESPACE"
+export NODE_VM_SIZE="$NODE_VM_SIZE"
+export NODE_COUNT="$NODE_COUNT"
 EOF
 
 chmod +x "$OUTPUT_ENV"
-
-echo ""
-echo "Done. Environment file written to: $OUTPUT_ENV"
-echo "Next step: source $OUTPUT_ENV && ./install-lakehouse.sh"
+echo "Done. Next step: source $OUTPUT_ENV && ./install-lakehouse.sh"
 echo ""
