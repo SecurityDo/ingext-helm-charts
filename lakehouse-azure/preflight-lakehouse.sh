@@ -107,10 +107,10 @@ echo "  ID:      $CURRENT_SUB_ID"
 echo "  User:    $CURRENT_USER"
 echo ""
 
-read -rp "Use this subscription? (Y/n): " USE_CURRENT
+read -rp "Use this subscription? Y/n: " USE_CURRENT
 if [[ "$USE_CURRENT" == "n" || "$USE_CURRENT" == "N" ]]; then
-  echo "Options: 1) Select from list above, 2) Login with different account"
-  read -rp "Choice (1/2): " SWITCH_OPTION
+  echo "Options: 1 Select from list above, 2 Login with different account"
+  read -rp "Choice 1/2: " SWITCH_OPTION
   if [[ "$SWITCH_OPTION" == "1" ]]; then
     read -rp "Enter subscription Name or ID: " TARGET_SUB
     if [[ -n "$TARGET_SUB" ]]; then
@@ -148,7 +148,8 @@ prompt() {
     val=$(echo "$val" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')
   fi
 
-  printf -v "$var_name" "%s" "$val"
+  # Use a simple assignment instead of printf -v for maximum compatibility
+  eval "$var_name=\"\$val\""
 }
 
 prompt LOCATION "Azure Region" "eastus"
@@ -160,7 +161,7 @@ DEFAULT_STORAGE_ACCOUNT="ingextlake$(echo "$SUB_ID" | tr -d '-' | head -c 8)"
 prompt STORAGE_ACCOUNT "Storage Account Name (for Datalake)" "$DEFAULT_STORAGE_ACCOUNT" "true"
 prompt STORAGE_CONTAINER "Blob Container Name" "datalake" "true"
 
-prompt SITE_DOMAIN "Public Domain (e.g. ingext.example.com)" ""
+prompt SITE_DOMAIN "Public Domain (e.g. lakehouse.k8.ingext.io)" ""
 prompt CERT_EMAIL "Email for TLS certificate (Let's Encrypt)" ""
 prompt NAMESPACE "Kubernetes Namespace" "ingext" "true"
 
@@ -201,9 +202,9 @@ prompt NODE_COUNT "Initial Node Count" "3"
 # 3) Readiness Checklist
 echo ""
 echo "Permissions & Readiness Check:"
-prompt HAS_BILLING "Do you have active billing enabled? (yes/no)" "yes"
-prompt HAS_OWNER "Do you have Owner/Contributor permissions? (yes/no)" "yes"
-prompt HAS_DNS "Do you control DNS for '$SITE_DOMAIN'? (yes/no)" "yes"
+prompt HAS_BILLING "Do you have active billing enabled? (yes or no)" "yes"
+prompt HAS_OWNER "Do you have Owner/Contributor permissions? (yes or no)" "yes"
+prompt HAS_DNS "Do you control DNS for '$SITE_DOMAIN'? (yes or no)" "yes"
 
 # 4) Technical Checks
 echo ""
