@@ -40,7 +40,30 @@ for bin in aws eksctl kubectl helm; do
   need "$bin"
 done
 
-# -------- 2. Phase 1: Foundation (EKS) --------
+# -------- 2. Deployment Summary --------
+cat <<EOF
+
+================ Deployment Plan ================
+AWS Region:        $AWS_REGION
+AWS Profile:       $AWS_PROFILE
+EKS Cluster:       $CLUSTER_NAME
+S3 Bucket:         $S3_BUCKET
+Node Count:        $NODE_COUNT
+Node Instance:     $NODE_TYPE
+Namespace:         $NAMESPACE
+Site Domain:       $SITE_DOMAIN
+ACM Cert ARN:      $CERT_ARN
+================================================
+
+EOF
+
+read -rp "Proceed with Lakehouse deployment? (y/N): " CONFIRM
+[[ "$CONFIRM" =~ ^[Yy]$ ]] || {
+  echo "Deployment cancelled."
+  exit 2
+}
+
+# -------- 3. Phase 1: Foundation (EKS) --------
 log "Phase 1: Foundation - Checking/Creating EKS Cluster '$CLUSTER_NAME'..."
 if ! eksctl get cluster --name "$CLUSTER_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
   eksctl create cluster \

@@ -37,7 +37,31 @@ for bin in az kubectl helm; do
   need "$bin"
 done
 
-# -------- 2. Phase 1: Foundation (AKS) --------
+# -------- 2. Deployment Summary --------
+cat <<EOF
+
+================ Deployment Plan ================
+Azure Region:      $LOCATION
+Resource Group:    $RESOURCE_GROUP
+AKS Cluster:       $CLUSTER_NAME
+Storage Account:   $STORAGE_ACCOUNT
+Blob Container:    $STORAGE_CONTAINER
+Node Count:        $NODE_COUNT
+Node VM Size:      $NODE_VM_SIZE
+Namespace:         $NAMESPACE
+Site Domain:       $SITE_DOMAIN
+Cert Email:        $CERT_EMAIL
+================================================
+
+EOF
+
+read -rp "Proceed with Lakehouse deployment? (y/N): " CONFIRM
+[[ "$CONFIRM" =~ ^[Yy]$ ]] || {
+  echo "Deployment cancelled."
+  exit 2
+}
+
+# -------- 3. Phase 1: Foundation (AKS) --------
 log "Phase 1: Foundation - Checking/Creating Resource Group '$RESOURCE_GROUP'..."
 if ! az group show --name "$RESOURCE_GROUP" >/dev/null 2>&1; then
   az group create --name "$RESOURCE_GROUP" --location "$LOCATION"
@@ -47,7 +71,7 @@ fi
 
 log "Phase 1: Foundation - Checking/Creating AKS Cluster '$CLUSTER_NAME'..."
 if ! az aks show --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
-  az aks create \
+  AKS_OUTPUT=$(az aks create \
     --resource-group "$RESOURCE_GROUP" \
     --name "$CLUSTER_NAME" \
     --location "$LOCATION" \
@@ -59,7 +83,34 @@ if ! az aks show --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" >/dev
     --network-plugin azure \
     --enable-addons ingress-appgw \
     --appgw-name "${CLUSTER_NAME}agw" \
-    --appgw-subnet-cidr "10.225.0.0/16"
+    --appgw-subnet-cidr "10.225.0.0/16" 2>&1) || {
+    
+    if echo "$AKS_OUTPUT" | grep -q "VM size.*is not allowed"; then
+      echo ""
+      echo "ERROR: VM size '$NODE_VM_SIZE' is not available for AKS in your subscription."
+      echo ""
+      echo "NOTE: AKS has different restrictions than general VM availability."
+      echo "The error message above shows the ACTUAL available sizes for AKS."
+      echo ""
+      
+      # Try to extract available sizes from the error message
+      AVAILABLE_SIZES=$(echo "$AKS_OUTPUT" | grep -oP "The available VM sizes are '[^']*'" | sed "s/The available VM sizes are '//;s/'$//" | tr ',' '\n' | sed 's/^[[:space:]]*//' | head -n 15 || true)
+      
+      if [[ -n "$AVAILABLE_SIZES" ]]; then
+        echo "Available VM sizes for AKS in your subscription:"
+        echo "$AVAILABLE_SIZES" | while read -r size; do
+          if [[ -n "$size" ]]; then echo "  - $size"; fi
+        done
+        echo ""
+        echo "Please run preflight again and select a supported size."
+      fi
+      exit 1
+    else
+      echo "ERROR: AKS cluster creation failed."
+      echo "$AKS_OUTPUT"
+      exit 1
+    fi
+  }
 else
   log "Cluster '$CLUSTER_NAME' already exists. Skipping creation."
 fi

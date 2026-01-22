@@ -23,23 +23,40 @@ log() {
   echo "==> $*"
 }
 
-ask_confirm() {
-  read -p "$1 [y/N]: " -n 1 -r
-  echo
-  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    return 1
-  fi
-  return 0
-}
+# -------- 2. Get DNS information before cleanup --------
+log "Gathering DNS information for cleanup reminder..."
+ING_IP=""
+ING_DOMAIN=""
+# Try to get ingress IP and domain before uninstalling
+if az aks show --resource-group "$RESOURCE_GROUP" --name "$CLUSTER_NAME" >/dev/null 2>&1; then
+  az aks get-credentials --resource-group "$RESOURCE_GROUP" --name "$CLUSTER_NAME" --overwrite-existing 2>/dev/null || true
+  ING_IP=$(kubectl get ingress -n "$NAMESPACE" -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+  ING_DOMAIN=$(kubectl get ingress -n "$NAMESPACE" -o jsonpath='{.items[0].spec.rules[0].host}' 2>/dev/null || true)
+fi
+
+if [[ -z "$ING_DOMAIN" ]]; then
+  ING_DOMAIN="$SITE_DOMAIN"
+fi
 
 log "Starting Lakehouse cleanup for resource group '$RESOURCE_GROUP'..."
 
-if ! ask_confirm "Are you sure you want to DELETE EVERYTHING in '$RESOURCE_GROUP'? (Data will be lost)"; then
+echo "================ Cleanup Plan ================"
+echo "Resource Group:      $RESOURCE_GROUP"
+echo "AKS Cluster:         $CLUSTER_NAME"
+echo "Namespace:           $NAMESPACE"
+echo "DNS Domain:          $ING_DOMAIN"
+echo "=============================================="
+echo ""
+echo "WARNING: This will delete ALL resources in the resource group."
+echo ""
+
+read -rp "Proceed with deletion? (y/N): " CONFIRM
+if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
   echo "Aborted."
   exit 0
 fi
 
-# -------- 2. Uninstall Helm (Optional but good practice) --------
+# -------- 3. Uninstall Helm (Optional but good practice) --------
 log "Phase 1: Uninstalling Helm Releases..."
 HELM_RELEASES=(
   "ingext-ingress"
@@ -77,3 +94,15 @@ echo "  az group show --name $RESOURCE_GROUP"
 log "========================================================"
 log "✅ Lakehouse Cleanup Initiated!"
 log "========================================================"
+
+if [[ -n "$ING_DOMAIN" ]] || [[ -n "$ING_IP" ]]; then
+  echo ""
+  echo "IMPORTANT: Remove DNS Record"
+  echo "---------------------------"
+  if [[ -n "$ING_DOMAIN" ]] && [[ -n "$ING_IP" ]]; then
+    echo "Delete the A-record: $ING_DOMAIN -> $ING_IP"
+  elif [[ -n "$ING_DOMAIN" ]]; then
+    echo "Remove the DNS record for domain: $ING_DOMAIN"
+  fi
+  echo ""
+fi
