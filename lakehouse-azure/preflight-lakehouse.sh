@@ -167,20 +167,30 @@ prompt NAMESPACE "Kubernetes Namespace" "ingext" "true"
 # VM Size selection - show available sizes specifically for AKS
 echo ""
 echo "VM Size Selection for region '$LOCATION'..."
-# Try to get AKS-specific VM sizes first, fallback to filtered general sizes
+# Try to get AKS-specific VM sizes first
 TABLE_OUTPUT=$(az aks list-locations --location "$LOCATION" --query "vmSizes" -o table 2>/dev/null || az vm list-sizes --location "$LOCATION" --output table 2>/dev/null || echo "")
 DEFAULT_VM_SIZE="Standard_D2s_v6"
 
 if [[ -n "$TABLE_OUTPUT" ]]; then
-  # Filter to common sizes, prioritizing the D-series which is best for Ingext
-  FILTERED=$(echo "$TABLE_OUTPUT" | grep -E "Standard_D[0-9]|standard_d[0-9]" | head -n 15 || true)
+  # Check if our default specifically exists in the allowed list
+  if echo "$TABLE_OUTPUT" | grep -qi "$DEFAULT_VM_SIZE"; then
+    echo "✅ Default size '$DEFAULT_VM_SIZE' is available in this region."
+  else
+    echo "⚠️  Note: Default '$DEFAULT_VM_SIZE' not found in immediate list. It may have a different name or be restricted."
+  fi
+  echo ""
+
+  # Filter to common sizes, focusing on D-series (General Purpose)
+  # We show a mix of older and newer generations
+  FILTERED=$(echo "$TABLE_OUTPUT" | grep -Ei "Standard_D[0-9]+[as]*_v[456]" | head -n 20 || true)
+  
   if [[ -n "$FILTERED" ]]; then
-    echo "Commonly supported AKS sizes in your region (prioritizing D-series):"
+    echo "Commonly supported AKS sizes (D-series v4, v5, v6):"
     echo "$FILTERED"
     echo ""
   else
-    echo "Could not find preferred D-series. Showing first 10 available sizes:"
-    echo "$TABLE_OUTPUT" | head -n 12
+    echo "Could not find specific D-series v4-v6. Showing first 15 available sizes:"
+    echo "$TABLE_OUTPUT" | head -n 15
     echo ""
   fi
 fi
