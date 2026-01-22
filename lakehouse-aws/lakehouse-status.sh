@@ -69,7 +69,8 @@ check_pod_status() {
     if [[ -n "$status" ]]; then
       # Found it, now check readiness if it's running
       if [[ "$status" == "Running" ]]; then
-        local ready=$(kubectl get pods -n "$NAMESPACE" -l "$label" -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null || echo "true")
+        # Use separate lines to avoid complex command substitution syntax errors in some shells
+        ready=$(kubectl get pods -n "$NAMESPACE" -l "$label" -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
         if [[ "$ready" == "false" ]]; then
           status="Starting (0/1)"
           color="$YELLOW"
@@ -122,4 +123,6 @@ printf "$FORMAT" "DNS Domain" "$SITE_DOMAIN"
 
 echo "========================================================================"
 echo ""
-
+echo "💡 TIP: If components are 'NOT DEPLOYED' or stuck, check logs:"
+echo "   ./lakehouse-logs.sh api"
+echo ""

@@ -29,6 +29,7 @@ log() {
 need() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "ERROR: missing dependency: $1"
+    echo "💡 TIP: Run './start-docker-shell.sh' to launch a pre-configured toolbox with all dependencies installed."
     exit 1
   }
 }
@@ -117,7 +118,7 @@ fi
 
 az aks get-credentials --resource-group "$RESOURCE_GROUP" --name "$CLUSTER_NAME" --overwrite-existing
 
-# -------- 3. Phase 2: Storage (Storage Account & Workload Identity) --------
+# -------- 4. Phase 2: Storage (Storage Account & Workload Identity) --------
 log "Phase 2: Storage - Checking Storage Account '$STORAGE_ACCOUNT'..."
 if ! az storage account show --name "$STORAGE_ACCOUNT" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
   az storage account create \
@@ -147,7 +148,6 @@ if ! az identity show --name "$USER_ASSIGNED_IDENTITY_NAME" --resource-group "$R
 fi
 
 IDENTITY_CLIENT_ID=$(az identity show --name "$USER_ASSIGNED_IDENTITY_NAME" --resource-group "$RESOURCE_GROUP" --query clientId -o tsv)
-IDENTITY_ID=$(az identity show --name "$USER_ASSIGNED_IDENTITY_NAME" --resource-group "$RESOURCE_GROUP" --query id -o tsv)
 
 # Assign Storage Blob Data Contributor role to the identity
 az role assignment create \
@@ -166,16 +166,9 @@ if ! az identity federated-credential show --name "ingextfedcred" --identity-nam
     --subject "system:serviceaccount:$NAMESPACE:${NAMESPACE}-sa"
 fi
 
-# -------- 4. Phase 3: Core Services --------
+# -------- 5. Phase 3: Core Services --------
 log "Phase 4: Core Services - Installing Stack..."
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
-
-# Login to ECR Public
-az acr login --name ingext --expose-token --query accessToken -o tsv | helm registry login public.ecr.aws --username 000000000000 --password-stdin 2>/dev/null || true
-
-helm upgrade --install ingext-stack oci://public.ecr.aws/ingext/ingext-stack -n "$NAMESPACE"
-helm upgrade --install etcd-single oci://public.ecr.aws/ingext/etcd-single -n "$NAMESPACE"
-helm upgrade --install etcd-single-cronjob oci://public.ecr.aws/ingext/etcd-single-cronjob -n "$NAMESPACE"
 
 # setup token in app-secret for shell cli access
 random_str=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 15 || true)
@@ -184,7 +177,11 @@ kubectl create secret generic app-secret \
     --from-literal=token="tok_$random_str" \
     --dry-run=client -o yaml | kubectl apply -f -
 
-# -------- 5. Phase 4: Application (Stream) --------
+helm upgrade --install ingext-stack oci://public.ecr.aws/ingext/ingext-stack -n "$NAMESPACE"
+helm upgrade --install etcd-single oci://public.ecr.aws/ingext/etcd-single -n "$NAMESPACE"
+helm upgrade --install etcd-single-cronjob oci://public.ecr.aws/ingext/etcd-single-cronjob -n "$NAMESPACE"
+
+# -------- 6. Phase 4: Application (Stream) --------
 log "Phase 5: Application - Installing Ingext Stream..."
 # Create the service account with workload identity annotation
 cat <<EOF | kubectl apply -f -
@@ -203,13 +200,12 @@ helm upgrade --install ingext-community-config oci://public.ecr.aws/ingext/ingex
 helm upgrade --install ingext-community-init oci://public.ecr.aws/ingext/ingext-community-init -n "$NAMESPACE"
 helm upgrade --install ingext-community oci://public.ecr.aws/ingext/ingext-community -n "$NAMESPACE"
 
-# -------- 6. Phase 5: Application (Datalake) --------
+# -------- 7. Phase 5: Application (Datalake) --------
 log "Phase 6: Application - Installing Ingext Datalake..."
 helm upgrade --install ingext-lake-config oci://public.ecr.aws/ingext/ingext-lake-config -n "$NAMESPACE" \
   --set storageType=blob --set blob.accountName="$STORAGE_ACCOUNT" --set blob.containerName="$STORAGE_CONTAINER"
 
-# Node Pools (using standard node pool for now, as Azure doesn't have a direct Karpenter equivalent yet)
-# We use the ingext-aks-pool chart to define labels/taints if needed
+# Node Pools
 helm upgrade --install ingext-aks-pool oci://public.ecr.aws/ingext/ingext-aks-pool
 
 helm upgrade --install ingext-manager-role oci://public.ecr.aws/ingext/ingext-manager-role -n "$NAMESPACE"
@@ -218,7 +214,7 @@ helm upgrade --install ingext-blob-lake oci://public.ecr.aws/ingext/ingext-blob-
 
 helm upgrade --install ingext-lake oci://public.ecr.aws/ingext/ingext-lake -n "$NAMESPACE"
 
-# -------- 7. Phase 6: Ingress --------
+# -------- 8. Phase 6: Ingress --------
 log "Phase 7: Ingress - Setting up Cert Manager..."
 helm repo add jetstack https://charts.jetstack.io && helm repo update
 helm upgrade --install cert-manager jetstack/cert-manager \
