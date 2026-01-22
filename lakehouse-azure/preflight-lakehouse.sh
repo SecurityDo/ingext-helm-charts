@@ -178,6 +178,8 @@ esac
 
 echo ""
 echo "Selected VM Size: $NODE_VM_SIZE"
+# Ensure the VM size is lowercase for the installer
+NODE_VM_SIZE=$(echo "$NODE_VM_SIZE" | tr '[:upper:]' '[:lower:]')
 prompt NODE_COUNT "Initial Node Count" "$NODE_COUNT_DEFAULT"
 
 # 3) Readiness Checklist
