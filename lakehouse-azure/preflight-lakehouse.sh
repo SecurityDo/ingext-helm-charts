@@ -145,14 +145,14 @@ find_allowed() {
 }
 
 # Candidate lists (ordered by most likely to be allowed)
-# We prioritize s_v4/v5 as they are the most compatible
-SMALL_CANDS=("Standard_D2s_v4" "Standard_D2s_v5" "Standard_D2_v4" "Standard_D2_v3" "Standard_D2as_v5")
-MEDIUM_CANDS=("Standard_D4s_v4" "Standard_D4s_v5" "Standard_D4_v4" "Standard_D4_v3" "Standard_D4as_v5")
-LARGE_CANDS=("Standard_D8s_v4" "Standard_D8s_v5" "Standard_D8_v4" "Standard_D8_v3" "Standard_D8as_v5")
+# We prioritize s_v6 as it's the recommended modern default
+SMALL_CANDS=("Standard_D2s_v6" "Standard_D2s_v4" "Standard_D2s_v5" "Standard_D2_v4" "Standard_D2_v3" "Standard_D2as_v5")
+MEDIUM_CANDS=("Standard_D4s_v6" "Standard_D4s_v4" "Standard_D4s_v5" "Standard_D4_v4" "Standard_D4_v3" "Standard_D4as_v5")
+LARGE_CANDS=("Standard_D8s_v6" "Standard_D8s_v4" "Standard_D8s_v5" "Standard_D8_v4" "Standard_D8_v3" "Standard_D8as_v5")
 
-SMALL_SKU=$(find_allowed "${SMALL_CANDS[@]}" || echo "Standard_D2as_v4")
-MEDIUM_SKU=$(find_allowed "${MEDIUM_CANDS[@]}" || echo "Standard_D4as_v4")
-LARGE_SKU=$(find_allowed "${LARGE_CANDS[@]}" || echo "Standard_D8as_v4")
+SMALL_SKU=$(find_allowed "${SMALL_CANDS[@]}" || echo "Standard_D2s_v6")
+MEDIUM_SKU=$(find_allowed "${MEDIUM_CANDS[@]}" || echo "Standard_D4s_v6")
+LARGE_SKU=$(find_allowed "${LARGE_CANDS[@]}" || echo "Standard_D8s_v6")
 
 echo "  ✅ Verification complete."
 echo ""
@@ -183,8 +183,6 @@ esac
 
 echo ""
 echo "Selected VM Size: $NODE_VM_SIZE"
-# Ensure the VM size is lowercase for the installer
-NODE_VM_SIZE=$(echo "$NODE_VM_SIZE" | tr '[:upper:]' '[:lower:]')
 prompt NODE_COUNT "Initial Node Count" "$NODE_COUNT_DEFAULT"
 
 # 3) Readiness Checklist
