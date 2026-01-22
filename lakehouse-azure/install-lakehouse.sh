@@ -118,6 +118,26 @@ if ! az aks show --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" >/dev
         echo "$AKS_OUTPUT"
       fi
       exit 1
+    elif echo "$AKS_OUTPUT" | grep -qi "ErrCode_InsufficientVCPUQuota"; then
+      # Extract values: "... left regional vcpu quota 10, requested quota 12 ..."
+      QUOTA_LEFT=$(echo "$AKS_OUTPUT" | grep -oEi "left regional vcpu quota [0-9]+" | awk '{print $NF}' || echo "unknown")
+      QUOTA_REQ=$(echo "$AKS_OUTPUT" | grep -oEi "requested quota [0-9]+" | awk '{print $NF}' || echo "unknown")
+      
+      echo ""
+      echo "❌ ERROR: INSUFFICIENT AZURE QUOTA"
+      echo "------------------------------------------------"
+      echo "Location:  $LOCATION"
+      echo "Available: $QUOTA_LEFT vCPUs"
+      echo "Requested: $QUOTA_REQ vCPUs"
+      echo "------------------------------------------------"
+      echo "Your Azure subscription quota for '$LOCATION' is too low for this deployment."
+      echo ""
+      echo "💡 SOLUTIONS:"
+      echo "  1. Request a quota increase: https://learn.microsoft.com/en-us/azure/quotas/view-quotas"
+      echo "  2. Run preflight again and choose a 'Small' preset (2 nodes x 2 vCPU = 4 total)."
+      echo "  3. Use 'Custom' in preflight to set a lower node count (e.g., 2 nodes)."
+      echo ""
+      exit 1
     else
       echo "ERROR: AKS cluster creation failed."
       echo "$AKS_OUTPUT"
