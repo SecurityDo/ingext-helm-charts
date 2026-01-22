@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -uo pipefail # Removed -e to handle errors manually in the VM section
+set -uo pipefail
 
 ###############################################################################
 # Preflight Azure Lakehouse Wizard
@@ -48,20 +48,18 @@ fi
 need az
 
 echo ""
-echo "================ Preflight Azure Lakehouse (Interactive) ================"
+echo "================ Preflight Azure Lakehouse (Interactive) =================="
 echo ""
 
 # 1) Azure Auth & Subscription Check
 if ! az account show >/dev/null 2>&1; then
-  echo "You are not logged into Azure yet."
-  echo "Opening Azure login now."
+  echo "You are not logged into Azure yet. Opening login..."
   az login >/dev/null
 fi
 
-# Show available subscriptions
 echo "Available Azure Subscriptions:"
 echo ""
-az account list --output table 2>/dev/null || echo "Warning: Could not list subscriptions."
+az account list --output table 2>/dev/null
 
 echo ""
 CURRENT_SUB_ID="$(az account show --query id -o tsv 2>/dev/null || true)"
@@ -76,20 +74,9 @@ echo ""
 
 read -rp "Use this subscription? Y/n: " USE_CURRENT
 if [[ "$USE_CURRENT" == "n" || "$USE_CURRENT" == "N" ]]; then
-  echo "Options: 1 Select from list above, 2 Login with different account"
-  read -rp "Choice 1/2: " SWITCH_OPTION
-  if [[ "$SWITCH_OPTION" == "1" ]]; then
-    read -rp "Enter subscription Name or ID: " TARGET_SUB
-    if [[ -n "$TARGET_SUB" ]]; then
-      az account set --subscription "$TARGET_SUB" || { echo "ERROR: Failed to switch."; exit 1; }
-    fi
-  elif [[ "$SWITCH_OPTION" == "2" ]]; then
-    az login --allow-no-subscriptions >/dev/null
-    az account list --output table
-    read -rp "Enter subscription Name or ID to use: " TARGET_SUB
-    if [[ -n "$TARGET_SUB" ]]; then
-      az account set --subscription "$TARGET_SUB" || { echo "ERROR: Failed to switch."; exit 1; }
-    fi
+  read -rp "Enter subscription Name or ID: " TARGET_SUB
+  if [[ -n "$TARGET_SUB" ]]; then
+    az account set --subscription "$TARGET_SUB" || { echo "ERROR: Failed to switch."; exit 1; }
   fi
 fi
 
@@ -109,11 +96,9 @@ prompt() {
   else
     read -rp "$label: " val
   fi
-
   if [[ "$sanitize" == "true" ]]; then
     val=$(echo "$val" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')
   fi
-
   printf -v "$var_name" "%s" "$val"
 }
 
@@ -126,37 +111,40 @@ prompt STORAGE_ACCOUNT "Storage Account Name (for Datalake)" "$DEFAULT_STORAGE_A
 prompt STORAGE_CONTAINER "Blob Container Name" "datalake" "true"
 
 prompt SITE_DOMAIN "Public Domain" "lakehouse.k8.ingext.io"
-prompt CERT_EMAIL "Email for TLS certificate (Let's Encrypt)" ""
+prompt CERT_EMAIL "Email for TLS certificate (Let's Encrypt)" "chris@ingext.io"
 prompt NAMESPACE "Kubernetes Namespace" "ingext" "true"
 
-# VM Size selection
+# VM Size selection - THE HARD TRUTH
 echo ""
-echo "VM Size Selection for region '$LOCATION'..."
+echo "VM Size Selection for region '$LOCATION' (Subscription Truth Check)..."
 
-# Try to get sizes from multiple sources for maximum compatibility
-SERVICE_ALLOWED=$(az aks list-locations --location "$LOCATION" --query "vmSizes" -o tsv 2>/dev/null || echo "")
-SUBSCRIPTION_ALLOWED=$(az vm list-skus --location "$LOCATION" --resource-type virtualMachines --query "[?capabilities[?name=='vCPUs' && value>'1']].name" -o tsv 2>/dev/null || echo "")
-FALLBACK_SIZES=$(az vm list-sizes --location "$LOCATION" --query "[].name" -o tsv 2>/dev/null || echo "")
+# This query is the most accurate: it looks for SKUs that have NO restrictions (quota or policy blocks)
+# We also filter for vCPUs >= 2 to ensure the cluster can actually run Ingext.
+SUBSCRIPTION_TRUTH=$(az vm list-skus --location "$LOCATION" --resource-type virtualMachines --all --query "[?restrictions[0].type == null && capabilities[?name=='vCPUs' && value >= '2']].name" -o tsv 2>/dev/null | tr '[:upper:]' '[:lower:]' | sort || echo "")
 
-DEFAULT_VM_SIZE="Standard_D2s_v6"
-
-# Attempt intersection if possible
-if [[ -n "$SERVICE_ALLOWED" && -n "$SUBSCRIPTION_ALLOWED" ]]; then
-  ACTUAL_ALLOWED=$(comm -12 <(echo "$SERVICE_ALLOWED" | tr '[:upper:]' '[:lower:]' | sort) <(echo "$SUBSCRIPTION_ALLOWED" | tr '[:upper:]' '[:lower:]' | sort))
-else
-  ACTUAL_ALLOWED=""
-fi
-
-if [[ -n "$ACTUAL_ALLOWED" ]]; then
-  echo "Commonly supported AKS sizes for your subscription (D-series):"
-  echo "$ACTUAL_ALLOWED" | grep -Ei "standard_d[0-9]s_v[3456]" | head -n 15
-else
-  echo "⚠️  Note: Could not perform strict subscription check. Showing general available sizes:"
-  if [[ -n "$SERVICE_ALLOWED" ]]; then
-    echo "$SERVICE_ALLOWED" | grep -Ei "Standard_D[0-9]s_v[3456]" | head -n 15
+if [[ -n "$SUBSCRIPTION_TRUTH" ]]; then
+  echo "The following sizes are verified as ALLOWED for your subscription in '$LOCATION':"
+  
+  # Prioritize D-series, then B-series as fallback
+  D_SERIES=$(echo "$SUBSCRIPTION_TRUTH" | grep -Ei "^standard_d" | head -n 15 || true)
+  B_SERIES=$(echo "$SUBSCRIPTION_TRUTH" | grep -Ei "^standard_b" | head -n 10 || true)
+  
+  if [[ -n "$D_SERIES" ]]; then
+    echo "$D_SERIES"
+    # Set default to the first D-series we found that's at least v3/v4/v5/v6
+    DEFAULT_VM_SIZE=$(echo "$D_SERIES" | grep -Ei "_v[3456]" | head -n 1 || echo "$(echo "$D_SERIES" | head -n 1)")
+  elif [[ -n "$B_SERIES" ]]; then
+    echo "⚠️  Note: No D-series allowed. Showing B-series (Burstable):"
+    echo "$B_SERIES"
+    DEFAULT_VM_SIZE=$(echo "$B_SERIES" | head -n 1)
   else
-    echo "$FALLBACK_SIZES" | grep -Ei "Standard_D[0-9]s_v[3456]" | head -n 15
+    echo "$SUBSCRIPTION_TRUTH" | head -n 15
+    DEFAULT_VM_SIZE=$(echo "$SUBSCRIPTION_TRUTH" | head -n 1)
   fi
+else
+  echo "⚠️  WARNING: Could not verify subscription limits. Falling back to regional list."
+  DEFAULT_VM_SIZE="Standard_D2s_v6"
+  az vm list-sizes --location "$LOCATION" --query "[].name" -o tsv 2>/dev/null | head -n 15
 fi
 
 echo ""
@@ -173,40 +161,21 @@ prompt HAS_DNS "Do you control DNS for '$SITE_DOMAIN'? yes/no" "yes"
 # 4) Technical Checks
 echo ""
 echo "---------------- Best-effort checks ----------------"
-
 echo "[Check] Providers registered"
-RP_AKS="$(az provider show -n Microsoft.ContainerService --query registrationState -o tsv 2>/dev/null || echo "Registered")"
-RP_NET="$(az provider show -n Microsoft.Network --query registrationState -o tsv 2>/dev/null || echo "Registered")"
-echo "  AKS Provider: $RP_AKS"
-echo "  Network Provider: $RP_NET"
-
-echo ""
-echo "[Check] Region Quota Snapshot"
-az vm list-usage --location "$LOCATION" -o table 2>/dev/null | head -n 10 || echo "  Unable to query quota."
+az provider show -n Microsoft.ContainerService --query registrationState -o tsv 2>/dev/null || echo "Registered"
 
 echo ""
 echo "[Check] DNS Resolution"
 if [[ -n "$SITE_DOMAIN" ]] && command -v dig >/dev/null 2>&1; then
-  A_REC="$(dig +short A "$SITE_DOMAIN" | head -n 1 || true)"
-  if [[ -n "$A_REC" ]]; then
-    echo "  Current A record for $SITE_DOMAIN: $A_REC"
-  else
-    echo "  No A record found (expected for new setup)."
-  fi
+  dig +short A "$SITE_DOMAIN" | head -n 1 || true
 fi
 
 # 5) Write env file
 echo ""
 if [[ -f "$OUTPUT_ENV" ]]; then
-  echo "WARNING: $OUTPUT_ENV already exists."
-  read -rp "Overwrite? (y/N): " CONFIRM_OVERWRITE
-  if [[ ! "$CONFIRM_OVERWRITE" =~ ^[Yy]$ ]]; then
-    echo "Cancelled."
-    exit 2
-  fi
+  read -rp "Overwrite $OUTPUT_ENV? (y/N): " CONFIRM_OVERWRITE
+  [[ "$CONFIRM_OVERWRITE" =~ ^[Yy]$ ]] || { echo "Cancelled."; exit 2; }
 fi
-
-echo "Writing environment file: $OUTPUT_ENV"
 
 cat > "$OUTPUT_ENV" <<EOF
 # Generated by preflight-lakehouse.sh
@@ -225,5 +194,5 @@ export NODE_COUNT="$NODE_COUNT"
 EOF
 
 chmod +x "$OUTPUT_ENV"
-echo "Done. Next step: source $OUTPUT_ENV && ./install-lakehouse.sh"
+echo "Done. Environment file written to: $OUTPUT_ENV"
 echo ""
