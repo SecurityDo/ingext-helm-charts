@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
+set -uo pipefail
 
 ###############################################################################
 # Preflight Azure Lakehouse Wizard
@@ -48,42 +48,42 @@ fi
 need az
 
 echo ""
-echo "================ Preflight Azure Lakehouse (Interactive) ================"
+echo "================ Preflight Azure Lakehouse (Interactive) =================="
 echo ""
 
-# 1) Azure Auth Check
+# 1) Azure Auth & Subscription Check
 if ! az account show >/dev/null 2>&1; then
-  echo "You are not logged into Azure yet."
-  echo "Opening Azure login now."
+  echo "You are not logged into Azure yet. Opening login..."
   az login >/dev/null
 fi
 
-# Show available subscriptions
 echo "Available Azure Subscriptions:"
-SUBSCRIPTIONS=$(az account list --output table 2>/dev/null || echo "")
-if [[ -z "$SUBSCRIPTIONS" ]]; then
-    echo "ERROR: Could not list subscriptions. Please check your Azure access."
-    exit 1
-fi
-echo "$SUBSCRIPTIONS"
 echo ""
+az account list --output table 2>/dev/null
 
+echo ""
 CURRENT_SUB_ID="$(az account show --query id -o tsv 2>/dev/null || true)"
 CURRENT_SUB_NAME="$(az account show --query name -o tsv 2>/dev/null || true)"
+CURRENT_USER="$(az account show --query user.name -o tsv 2>/dev/null || true)"
 
-echo "Currently active subscription: $CURRENT_SUB_NAME ($CURRENT_SUB_ID)"
-read -rp "Use this subscription? (Y/n): " USE_CURRENT
+echo "Currently active subscription:"
+echo "  Name:    $CURRENT_SUB_NAME"
+echo "  ID:      $CURRENT_SUB_ID"
+echo "  User:    $CURRENT_USER"
+echo ""
+
+read -rp "Use this subscription? Y/n: " USE_CURRENT
 if [[ "$USE_CURRENT" == "n" || "$USE_CURRENT" == "N" ]]; then
-  read -rp "Enter subscription name or ID to switch to: " TARGET_SUB
+  read -rp "Enter subscription Name or ID: " TARGET_SUB
   if [[ -n "$TARGET_SUB" ]]; then
-    az account set --subscription "$TARGET_SUB" || { echo "ERROR: Failed to set subscription."; exit 1; }
+    az account set --subscription "$TARGET_SUB" || { echo "ERROR: Failed to switch."; exit 1; }
   fi
 fi
 
 SUB_ID="$(az account show --query id -o tsv 2>/dev/null || true)"
 TENANT_ID="$(az account show --query tenantId -o tsv 2>/dev/null || true)"
 
-# 2) Prompt for remaining inputs
+# 2) Collect inputs
 prompt() {
   local var_name="$1"
   local label="$2"
@@ -96,80 +96,88 @@ prompt() {
   else
     read -rp "$label: " val
   fi
-
   if [[ "$sanitize" == "true" ]]; then
-    # Lowercase and digits only
     val=$(echo "$val" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')
   fi
-
-  printf -v "$var_name" "%s" "$val"
+  # Use eval for maximum compatibility with all shells
+  eval "$var_name=\"\$val\""
 }
 
 prompt LOCATION "Azure Region" "eastus"
 prompt RESOURCE_GROUP "Resource Group Name" "ingext-lakehouse-rg" "true"
 prompt CLUSTER_NAME "AKS Cluster Name" "ingext-lakehouse" "true"
 
-# Storage Account naming: 3-24 characters, lowercase letters and numbers only.
 DEFAULT_STORAGE_ACCOUNT="ingextlake$(echo "$SUB_ID" | tr -d '-' | head -c 8)"
 prompt STORAGE_ACCOUNT "Storage Account Name (for Datalake)" "$DEFAULT_STORAGE_ACCOUNT" "true"
 prompt STORAGE_CONTAINER "Blob Container Name" "datalake" "true"
 
-prompt SITE_DOMAIN "Public Domain (e.g. ingext.example.com)" ""
-prompt CERT_EMAIL "Email for TLS certificate (Let's Encrypt)" ""
+prompt SITE_DOMAIN "Public Domain" "lakehouse.k8.ingext.io"
+prompt CERT_EMAIL "Email for TLS certificate (Let's Encrypt)" "chris@ingext.io"
 prompt NAMESPACE "Kubernetes Namespace" "ingext" "true"
 
-# Node preferences
+# VM Size selection
 echo ""
-echo "Instance Recommendations:"
-echo "  - Standard_D2s_v6 (Intel, 2 vCPU, 8GB)      - Cheap, no extra quota needed"
-echo "  - Standard_D4as_v5 (AMD EPYC, 4 vCPU, 16GB) - Recommended"
-prompt NODE_VM_SIZE "AKS Node VM Size" "Standard_D2s_v6"
+echo "VM Size Selection for region '$LOCATION'..."
+
+# Truthful "available to your subscription" list
+# We check for both null restrictions and empty list restrictions
+ALLOWED=$(
+  az vm list-skus -l "$LOCATION" --resource-type virtualMachines \
+    --query "[?(restrictions==null || length(restrictions) == \`0\`) && to_number(capabilities[?name=='vCPUs'].value | [0]) >= \`2\`].name" -o tsv 2>/dev/null || true
+)
+
+if [[ -n "$ALLOWED" ]]; then
+  echo "Commonly available sizes in your subscription (filtered):"
+  # D / Das / Dads / Ddsv / etc, v3-v6
+  # tr to lowercase for consistent regex matching
+  echo "$ALLOWED" \
+    | tr '[:upper:]' '[:lower:]' \
+    | grep -Ei '^(standard_)?d[0-9]+(a|as|ads|ad|d|p|pd|pld)?s?_v[3-6]$' \
+    | head -n 15
+  
+  # Set a safe default if our previous default isn't in the list
+  DEFAULT_VM_SIZE="Standard_D2s_v5" # Usually more available than v6 in many regions
+  FOUND_IN_LIST=$(echo "$ALLOWED" | tr '[:upper:]' '[:lower:]' | grep -xiE "^(standard_)?${DEFAULT_VM_SIZE}$" || true)
+  if [[ -z "$FOUND_IN_LIST" ]]; then
+    # Pick the first allowed D-series
+    DEFAULT_VM_SIZE=$(echo "$ALLOWED" | tr '[:upper:]' '[:lower:]' | grep -Ei '^(standard_)?d[0-9]+' | head -n 1 || echo "$(echo "$ALLOWED" | head -n 1)")
+    # Convert back to ProperCase for display
+    DEFAULT_VM_SIZE=$(echo "$DEFAULT_VM_SIZE" | sed 's/^standard/Standard/' | sed 's/_v/_v/')
+  fi
+else
+  echo "⚠️  Could not query subscription-available SKUs. Falling back to catalog list."
+  DEFAULT_VM_SIZE="Standard_D2as_v5"
+  az vm list-sizes -l "$LOCATION" --query "[?numberOfCores >= \`2\`].name" -o tsv 2>/dev/null | head -n 15
+fi
+
+echo ""
+prompt NODE_VM_SIZE "AKS Node VM Size" "$DEFAULT_VM_SIZE"
 prompt NODE_COUNT "Initial Node Count" "3"
 
-# 3) Technical Checks
+# 3) Readiness Checklist
+echo ""
+echo "Permissions & Readiness Check:"
+prompt HAS_BILLING "Do you have active billing enabled? (yes or no)" "yes"
+prompt HAS_OWNER "Do you have Owner/Contributor permissions? (yes or no)" "yes"
+prompt HAS_DNS "Do you control DNS for '$SITE_DOMAIN'? (yes or no)" "yes"
+
+# 4) Technical Checks
 echo ""
 echo "---------------- Best-effort checks ----------------"
-
-echo "[Check] Resource Group Availability"
-if az group show --name "$RESOURCE_GROUP" 2>/dev/null; then
-  echo "  Resource Group '$RESOURCE_GROUP' already exists."
-else
-  echo "  Resource Group '$RESOURCE_GROUP' will be created."
-fi
+echo "[Check] Providers registered"
+az provider show -n Microsoft.ContainerService --query registrationState -o tsv 2>/dev/null || echo "Registered"
 
 echo ""
-echo "[Check] Storage Account Name Availability"
-CHECK_STORAGE=$(az storage account check-name -n "$STORAGE_ACCOUNT" --query "nameAvailable" -o tsv 2>/dev/null || echo "true")
-if [[ "$CHECK_STORAGE" == "false" ]]; then
-    if az storage account show -n "$STORAGE_ACCOUNT" -g "$RESOURCE_GROUP" 2>/dev/null; then
-        echo "  Storage Account '$STORAGE_ACCOUNT' already exists in your RG."
-    else
-        echo "  WARNING: Storage Account Name '$STORAGE_ACCOUNT' is already taken globally."
-    fi
-else
-    echo "  Storage Account Name '$STORAGE_ACCOUNT' is available."
+echo "[Check] DNS Resolution"
+if [[ -n "$SITE_DOMAIN" ]] && command -v dig >/dev/null 2>&1; then
+  dig +short A "$SITE_DOMAIN" | head -n 1 || true
 fi
 
-echo ""
-echo "[Check] DNS resolution status"
-if command -v dig >/dev/null 2>&1; then
-  A_REC="$(dig +short A "$SITE_DOMAIN" | head -n 1 || true)"
-  if [[ -n "$A_REC" ]]; then
-    echo "  Current A record for $SITE_DOMAIN: $A_REC"
-  else
-    echo "  No A record found for $SITE_DOMAIN (expected for new setup)."
-  fi
-fi
-
-# 4) Write env file
+# 5) Write env file
 echo ""
 if [[ -f "$OUTPUT_ENV" ]]; then
-  echo "WARNING: $OUTPUT_ENV already exists."
-  read -rp "Overwrite? (y/N): " CONFIRM_OVERWRITE
-  if [[ ! "$CONFIRM_OVERWRITE" =~ ^[Yy]$ ]]; then
-    echo "Cancelled."
-    exit 2
-  fi
+  read -rp "Overwrite $OUTPUT_ENV? (y/N): " CONFIRM_OVERWRITE
+  [[ "$CONFIRM_OVERWRITE" =~ ^[Yy]$ ]] || { echo "Cancelled."; exit 2; }
 fi
 
 cat > "$OUTPUT_ENV" <<EOF
@@ -189,8 +197,5 @@ export NODE_COUNT="$NODE_COUNT"
 EOF
 
 chmod +x "$OUTPUT_ENV"
-
-echo ""
-echo "Done. Environment file written to: $OUTPUT_ENV"
-echo "Next step: source $OUTPUT_ENV && ./install-lakehouse.sh"
+echo "Done. Next step: source $OUTPUT_ENV && ./install-lakehouse.sh"
 echo ""

@@ -1,60 +1,57 @@
-# Integrated Azure Lakehouse Installer
+# Integrated Azure Data Lakehouse Installer (AKS + Blob)
 
-This directory contains scripts for a unified deployment of both **Ingext Stream** and **Ingext Datalake** on Microsoft Azure using Azure Kubernetes Service (AKS).
+This directory contains automated scripts for a unified deployment of the **Ingext Data Fabric** and **Ingext Datalake** on Microsoft Azure. This installer leverages **Azure Kubernetes Service (AKS)** for compute and **Azure Blob Storage** for high-scale, cost-effective data storage.
 
 ## Overview
 
-The Lakehouse installer provides a seamless setup experience, combining:
-- **Ingext Stream**: For real-time data ingestion, transformation, and routing.
-- **Ingext Datalake**: For scalable storage (Azure Blob Storage) and search capabilities.
+Deploy a production-ready, self-hosted data platform on Azure in minutes. The installer automates:
+- **Compute**: Azure Kubernetes Service (AKS) cluster optimized for data processing.
+- **Storage**: Azure Storage Accounts and Blob Containers configured for data lake workloads.
+- **Networking**: Azure Application Gateway integrated with **AGIC (Application Gateway Ingress Controller)** for automated load balancing and TLS.
+- **Security**: **Azure Workload Identity** for secure, passwordless access from Kubernetes pods to Azure resources.
 
-## Workflow
+## Deployment Workflow
 
-0. **Docker Shell (Recommended)**: Launch the pre-configured toolbox containing all necessary CLI tools.
+0. **Docker Shell (Recommended)**: Launch the pre-configured toolbox containing all necessary CLI tools (`az`, `kubectl`, `helm`).
    ```bash
    ./start-docker-shell.sh
    ```
-1. **Preflight**: Run the interactive wizard to verify your Azure environment and generate a configuration file.
+1. **Preflight Wizard**: Run the interactive script to verify your Azure subscription, resource availability, and generate your configuration.
    ```bash
    ./preflight-lakehouse.sh
    ```
-2. **Install**: Deploy the entire Lakehouse stack. The installer will also generate a random administrative token and save it to a Kubernetes secret (`app-secret`) for future CLI access.
+2. **Install**: Deploy the entire Lakehouse stack with a single command.
    ```bash
    source lakehouse-azure.env
    ./install-lakehouse.sh
    ```
-3. **Post-Installation (DNS)**: Wait for the Azure Application Gateway to be provisioned and then configure your DNS.
-   - **Watch for your Gateway IP address**:
-     ```bash
-     kubectl get ingress -n ingext -w
-     ```
-   - See [Azure DNS Setup Guide](AZURE_DNS_SETUP.md) for detailed instructions on mapping your domain.
-4. **Cleanup**: Tear down all resources when they are no longer needed.
+3. **Post-Installation (DNS)**: Configure your DNS once the Application Gateway is provisioned.
+   - See [Azure DNS Setup Guide](AZURE_DNS_SETUP.md) for mapping your domain to the Public IP.
+4. **Cleanup**: Systematically delete the Resource Group to stop billing.
    ```bash
    source lakehouse-azure.env
    ./cleanup-lakehouse.sh
    ```
 
-## Infrastructure Guides
+## Infrastructure Configuration Guides
 
-For detailed instructions on Azure DNS configuration, refer to:
+For detailed, step-by-step instructions on Azure-specific setup, refer to:
 - [Azure DNS Setup](AZURE_DNS_SETUP.md): Mapping your domain to the Application Gateway public IP.
 
-## Scripts
+## Included Scripts & Tools
 
-- `start-docker-shell.sh`: Launches a Docker container with all required tools and mounts your Azure credentials.
-- `preflight-lakehouse.sh`: Verifies Azure authentication, checks resource availability, and collects user input.
-- `install-lakehouse.sh`: Orchestrates the creation of AKS, Storage Accounts, Workload Identity, and all Ingext components.
-- `cleanup-lakehouse.sh`: Systematically removes the Resource Group and all contained resources.
-- `lakehouse-status.sh`: Shows a two-column status report of all installed components and infrastructure.
-- `lakehouse-logs.sh`: Quick access to error logs for any component (e.g. `./lakehouse-logs.sh api`).
+- `start-docker-shell.sh`: Secure Docker environment with all required Azure cloud tools.
+- `preflight-lakehouse.sh`: Interactive environment validator and configuration generator.
+- `install-lakehouse.sh`: Master orchestrator for AKS, Storage, Workload Identity, and Helm deployments.
+- `cleanup-lakehouse.sh`: Safe teardown of all provisioned Azure resources.
+- `lakehouse-status.sh`: Real-time health report for all components and pods.
+- `lakehouse-logs.sh`: Simple CLI for tailing logs from any component.
 
 ## Prerequisites
 
-- **Azure CLI** (`az`) installed and authenticated.
-- **kubectl** and **Helm** installed.
-- **Docker** (if running via the Ingext shell).
-- **DNS control** for your specified domain.
+- **Azure CLI** authenticated with appropriate permissions.
+- **DNS Control** for your domain.
+- **Docker** (to use the pre-configured shell).
 
 ### How to Configure Azure CLI
 

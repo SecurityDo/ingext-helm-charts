@@ -1,6 +1,14 @@
-# ingext-community
+# Ingext Technical Guide: Manual Kubernetes Installation & Advanced Configuration
 
-Welcome to the **ingext-community** repository. This project provides the Helm charts and configuration necessary to deploy the Ingext application on Kubernetes.
+Welcome to the **Ingext Technical Guide**. This document provides the Helm charts and deep-dive configuration necessary to manually deploy the Ingext Data Fabric on any Kubernetes cluster.
+
+### Why Manual Installation?
+While our [Unified Lakehouse Installers](README.md#🚀-fastest-way-to-try-ingext-recommended) are the recommended path for most users, manual installation is preferred when:
+- Deploying to an **existing Kubernetes cluster**.
+- Using a cloud provider or configuration not yet covered by our unified scripts.
+- Requiring granular control over individual microservices or storage backends.
+
+---
 
 ## 🚀 Complete Lakehouse Deployments (Recommended)
 
@@ -692,3 +700,8 @@ Visit the [Ingext Documentation](https://ingext.readme.io/docs/quick-start-guide
 ## Support
 
 If you encounter issues during installation, please open an issue in this repository.
+
+---
+<!--
+Keywords: Manual Kubernetes Deployment, Helm Charts Data Fabric, Self-Hosted Data Platform, EKS EFS S3, AKS Blob, GKE GCS, Data Ingestion Architecture, Real-time Data Processing, Fluency Processing Language, FPL Configuration, Kubernetes SIEM Ingestion.
+-->

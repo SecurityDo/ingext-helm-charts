@@ -16,8 +16,14 @@ fi
 
 source ./lakehouse-azure.env
 
+# Colors
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
 # Column formatting
-FORMAT="%-40s %-20s\n"
+FORMAT="%-40s %-20b\n"
 
 echo ""
 echo "==================== Lakehouse Status: $CLUSTER_NAME ===================="
@@ -25,14 +31,29 @@ printf "$FORMAT" "COMPONENT" "STATUS"
 echo "------------------------------------------------------------------------"
 
 # 1. Infrastructure Status
-printf "$FORMAT" "AKS Cluster ($CLUSTER_NAME)" "$(az aks show --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" --query 'provisioningState' -o tsv 2>/dev/null || echo "NOT FOUND")"
-printf "$FORMAT" "Storage Account ($STORAGE_ACCOUNT)" "$(az storage account show --name "$STORAGE_ACCOUNT" --resource-group "$RESOURCE_GROUP" --query 'provisioningState' -o tsv 2>/dev/null || echo "NOT FOUND")"
+get_az_status() {
+  local status="$1"
+  if [[ "$status" == "Succeeded" ]] || [[ "$status" == "Running" ]]; then
+    echo -e "${GREEN}${status}${NC}"
+  elif [[ "$status" == "Updating" ]] || [[ "$status" == "Creating" ]]; then
+    echo -e "${YELLOW}${status}${NC}"
+  else
+    echo -e "${RED}${status}${NC}"
+  fi
+}
+
+AKS_PROV=$(az aks show --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" --query 'provisioningState' -o tsv 2>/dev/null || echo "NOT FOUND")
+STORAGE_PROV=$(az storage account show --name "$STORAGE_ACCOUNT" --resource-group "$RESOURCE_GROUP" --query 'provisioningState' -o tsv 2>/dev/null || echo "NOT FOUND")
+
+printf "$FORMAT" "AKS Cluster ($CLUSTER_NAME)" "$(get_az_status "$AKS_PROV")"
+printf "$FORMAT" "Storage Account ($STORAGE_ACCOUNT)" "$(get_az_status "$STORAGE_PROV")"
 
 # 2. Kubernetes Pods Status Helper
 check_pod_status() {
   local app_name="$1"
   local display_name="$2"
   local status=""
+  local color="$NC"
 
   # Try different common label patterns
   local labels=(
@@ -42,14 +63,26 @@ check_pod_status() {
   )
 
   for label in "${labels[@]}"; do
+    # Get phase
     status=$(kubectl get pods -n "$NAMESPACE" -l "$label" -o jsonpath='{.items[0].status.phase}' 2>/dev/null || true)
+    
     if [[ -n "$status" ]]; then
-      # Found it, now check readiness if it's running
       if [[ "$status" == "Running" ]]; then
-        local ready=$(kubectl get pods -n "$NAMESPACE" -l "$label" -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null || echo "true")
-        if [[ "$ready" == "false" ]]; then
+        # Get readiness
+        local is_ready=""
+        is_ready=$(kubectl get pods -n "$NAMESPACE" -l "$label" -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null || echo "true")
+        
+        if [[ "$is_ready" == "false" ]]; then
           status="Starting (0/1)"
+          color="$YELLOW"
+        else
+          status="Running"
+          color="$GREEN"
         fi
+      elif [[ "$status" == "Pending" ]]; then
+        color="$YELLOW"
+      else
+        color="$RED"
       fi
       break
     fi
@@ -57,9 +90,10 @@ check_pod_status() {
 
   if [[ -z "$status" ]]; then
     status="NOT DEPLOYED"
+    color="$RED"
   fi
 
-  printf "$FORMAT" "$display_name" "$status"
+  printf "$FORMAT" "$display_name" "${color}${status}${NC}"
 }
 
 # 3. Component Status
@@ -86,8 +120,15 @@ echo ""
 echo "[Networking]"
 # Ingress Address
 AGW_IP=$(kubectl get ingress -n "$NAMESPACE" -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "PROVISIONING...")
-printf "$FORMAT" "Azure App Gateway" "$AGW_IP"
+COLOR_IP="$NC"
+if [[ "$AGW_IP" =~ ^[0-9] ]]; then
+  COLOR_IP="$GREEN"
+fi
+printf "$FORMAT" "Azure App Gateway" "${COLOR_IP}${AGW_IP}${NC}"
 printf "$FORMAT" "DNS Domain" "$SITE_DOMAIN"
 
 echo "========================================================================"
+echo ""
+echo "💡 TIP: If components are 'NOT DEPLOYED' or stuck, check logs:"
+echo "   ./lakehouse-logs.sh api"
 echo ""

@@ -1,0 +1,4 @@
+**/*.env
+# Ignore local README changes as requested
+README.md
+.DS_Store

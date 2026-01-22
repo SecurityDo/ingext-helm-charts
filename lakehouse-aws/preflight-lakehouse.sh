@@ -5,9 +5,9 @@ set -euo pipefail
 ###############################################################################
 # Preflight AWS Lakehouse Wizard
 #
-# - Verifies AWS authentication and profile.
+# - Verifies AWS authentication.
 # - Prompts for Stream + Datalake configuration.
-# - Performs best-effort checks (S3 name, EKS quotas, DNS).
+# - Performs best-effort checks (Permissions, S3, EKS).
 # - Writes lakehouse-aws.env.
 ###############################################################################
 
@@ -46,7 +46,6 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
 fi
 
 need aws
-need eksctl
 
 echo ""
 echo "================ Preflight AWS Lakehouse (Interactive) ================"
@@ -67,7 +66,7 @@ else
     echo "Available profiles:"
     echo "$PROFILES" | sed 's/^/  - /'
     echo ""
-    read -rp "Which AWS Profile would you like to use? [default]: " SELECTED_PROFILE
+    read -rp "Which AWS Profile would you like to use? default: " SELECTED_PROFILE
     export AWS_PROFILE="${SELECTED_PROFILE:-default}"
   else
     echo "⚠️  No AWS profiles found in ~/.aws/config"
@@ -84,11 +83,11 @@ if ! aws sts get-caller-identity >/dev/null 2>&1; then
   
   echo "⚠️  WARNING: You are not authenticated with profile '$AWS_PROFILE'."
   echo "   How do you normally log in to AWS?"
-  echo "   1. Browser / Email (SSO) -> Run 'aws sso login'"
-  echo "   2. Access Keys (IAM)     -> Run 'aws configure'"
+  echo "   1. Browser / Email SSO -> Run 'aws sso login'"
+  echo "   2. Access Keys IAM     -> Run 'aws configure'"
   echo "   3. Switch Profile        -> Run preflight again"
   echo ""
-  read -rp "Enter choice (1 or 2) or 'q' to quit: " LOGIN_CHOICE
+  read -rp "Enter choice 1 or 2 or 'q' to quit: " LOGIN_CHOICE
   if [[ "$LOGIN_CHOICE" == "1" ]]; then
     if [[ "$SELECTED_PROFILE" == "default" && -z "$(aws configure get sso_start_url 2>/dev/null)" ]]; then
       echo "--------------------------------------------------------"
@@ -96,10 +95,10 @@ if ! aws sts get-caller-identity >/dev/null 2>&1; then
       echo "   1. SSO session name: Type 'ingext'"
       echo "   2. SSO start URL:    https://d-xxxxxxxxxx.awsapps.com/start"
       echo "   3. SSO region:       Usually 'us-east-1'"
-      echo "   4. CLI profile name: Type 'default' (Recommended)"
+      echo "   4. CLI profile name: Type 'default' Recommended"
       echo "--------------------------------------------------------"
       echo ""
-      read -rp "Ready to run 'aws configure sso'? (y/N): " RUN_SSO_CONFIG
+      read -rp "Ready to run 'aws configure sso'? y/N: " RUN_SSO_CONFIG
       if [[ "$RUN_SSO_CONFIG" =~ ^[Yy]$ ]]; then
         aws configure sso
       else
@@ -157,54 +156,57 @@ prompt() {
     val=$(echo "$val" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')
   fi
 
-  printf -v "$var_name" "%s" "$val"
+  # Use a simple assignment instead of printf -v for maximum compatibility
+  eval "$var_name=\"\$val\""
 }
 
-# Remove AWS_PROFILE from prompt list below
-prompt AWS_REGION "AWS Region" "us-east-1"
+# 2) Collect inputs
+prompt AWS_REGION "AWS Region" "us-east-2"
 prompt CLUSTER_NAME "EKS Cluster Name" "ingext-lakehouse" "true"
-prompt S3_BUCKET "S3 Bucket Name (for Datalake)" "ingext-datalake-$ACCOUNT_ID" "true"
-prompt SITE_DOMAIN "Public Domain (e.g. ingext.example.com)" ""
+prompt S3_BUCKET "S3 Bucket Name (for Datalake)" "ingext-lakehouse-$ACCOUNT_ID" "true"
+prompt SITE_DOMAIN "Public Domain" "lakehouse.k8.ingext.io"
+prompt CERT_ARN "ACM Certificate ARN (Required for HTTPS)" "arn:aws:acm:us-east-2:..."
 prompt NAMESPACE "Kubernetes Namespace" "ingext" "true"
-prompt CERT_ARN "ACM Certificate ARN [Required for HTTPS]" ""
 
-# Validate CERT_ARN is not empty
-if [[ -z "$CERT_ARN" ]]; then
-  echo "⚠️  WARNING: CERT_ARN is empty. Ingress installation will fail."
-  echo "   Please run preflight again or manually set CERT_ARN in $OUTPUT_ENV."
-fi
-
-# Node preferences (AMD EPYC preference)
+# 3) Readiness Checklist
 echo ""
-echo "Instance Recommendations:"
-echo "  - m5a.large (AMD EPYC) - Recommended for general purpose"
-echo "  - t3.large (Intel)     - Cost-effective for testing"
-prompt NODE_TYPE "Primary Node Instance Type" "m5a.large"
-prompt NODE_COUNT "Initial Node Count" "3"
+echo "Permissions & Readiness Check:"
+prompt HAS_BILLING "Do you have active billing enabled? yes/no" "yes"
+prompt HAS_ADMIN "Do you have AdministratorAccess to create IAM, VPC, EKS? yes/no" "yes"
+prompt HAS_DNS "Do you control DNS for '$SITE_DOMAIN'? yes/no" "yes"
 
-# 3) Technical Checks
+# 4) Technical Checks
 echo ""
 echo "---------------- Best-effort checks ----------------"
 
-echo "[Check] S3 Bucket Availability"
+echo "[Check] S3 Bucket availability"
 if aws s3api head-bucket --bucket "$S3_BUCKET" 2>/dev/null; then
-  echo "  Bucket '$S3_BUCKET' already exists and you have access."
+  echo "  ✅ Bucket '$S3_BUCKET' already exists and you have access."
 else
-  echo "  Bucket '$S3_BUCKET' is available or will be created."
+  echo "  ℹ️  Bucket '$S3_BUCKET' does not exist (will be created)."
 fi
 
 echo ""
-echo "[Check] DNS resolution status"
-if command -v dig >/dev/null 2>&1; then
+echo "[Check] EKS Cluster status"
+CLUSTER_STATUS=$(aws eks describe-cluster --name "$CLUSTER_NAME" --query 'cluster.status' --output text 2>/dev/null || echo "NOT_FOUND")
+if [[ "$CLUSTER_STATUS" == "ACTIVE" ]]; then
+  echo "  ✅ EKS Cluster '$CLUSTER_NAME' is ACTIVE."
+else
+  echo "  ℹ️  EKS Cluster '$CLUSTER_NAME' not found or not active (will be created/updated)."
+fi
+
+echo ""
+echo "[Check] DNS Resolution"
+if [[ -n "$SITE_DOMAIN" ]] && command -v dig >/dev/null 2>&1; then
   A_REC="$(dig +short A "$SITE_DOMAIN" | head -n 1 || true)"
   if [[ -n "$A_REC" ]]; then
     echo "  Current A record for $SITE_DOMAIN: $A_REC"
   else
-    echo "  No A record found for $SITE_DOMAIN (expected for new setup)."
+    echo "  No A record found (expected for new setup)."
   fi
 fi
 
-# 4) Write env file
+# 5) Write env file
 echo ""
 if [[ -f "$OUTPUT_ENV" ]]; then
   echo "WARNING: $OUTPUT_ENV already exists."
@@ -215,18 +217,26 @@ if [[ -f "$OUTPUT_ENV" ]]; then
   fi
 fi
 
+echo "Writing environment file: $OUTPUT_ENV"
+
 cat > "$OUTPUT_ENV" <<EOF
 # Generated by preflight-lakehouse.sh
-export AWS_PROFILE="$AWS_PROFILE"
-export AWS_REGION="$AWS_REGION"
-export CLUSTER_NAME="$CLUSTER_NAME"
-export S3_BUCKET="$S3_BUCKET"
-export SITE_DOMAIN="$SITE_DOMAIN"
-export NAMESPACE="$NAMESPACE"
-export CERT_ARN="$CERT_ARN"
-export NODE_TYPE="$NODE_TYPE"
-export NODE_COUNT="$NODE_COUNT"
-export ACCOUNT_ID="$ACCOUNT_ID"
+# Usage:
+#   source $OUTPUT_ENV
+#   ./install-lakehouse.sh
+
+export AWS_PROFILE="$(printf '%s' "$AWS_PROFILE")"
+export AWS_REGION="$(printf '%s' "$AWS_REGION")"
+export CLUSTER_NAME="$(printf '%s' "$CLUSTER_NAME")"
+export S3_BUCKET="$(printf '%s' "$S3_BUCKET")"
+export SITE_DOMAIN="$(printf '%s' "$SITE_DOMAIN")"
+export CERT_ARN="$(printf '%s' "$CERT_ARN")"
+export NAMESPACE="$(printf '%s' "$NAMESPACE")"
+
+# Self-reported readiness (for support/debugging)
+export PREFLIGHT_HAS_BILLING="$(printf '%s' "$HAS_BILLING")"
+export PREFLIGHT_HAS_ADMIN="$(printf '%s' "$HAS_ADMIN")"
+export PREFLIGHT_HAS_DNS="$(printf '%s' "$HAS_DNS")"
 EOF
 
 chmod +x "$OUTPUT_ENV"
