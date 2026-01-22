@@ -1,65 +1,62 @@
-# Integrated AWS Lakehouse Installer
+# Integrated AWS Data Lakehouse Installer (EKS + S3)
 
-This directory contains scripts for a unified deployment of both **Ingext Stream** and **Ingext Datalake** on Amazon Web Services (AWS) using Amazon Elastic Kubernetes Service (EKS).
+This directory contains automated scripts for a unified deployment of the **Ingext Data Fabric** and **Ingext Datalake** on Amazon Web Services (AWS). This installer leverages **Amazon EKS** for compute and **Amazon S3** for high-scale, cost-effective data storage.
 
 ## Overview
 
-The Lakehouse installer provides a seamless setup experience, combining:
-- **Ingext Stream**: For real-time data ingestion, transformation, and routing.
-- **Ingext Datalake**: For scalable storage (S3) and search capabilities.
+Deploy a production-ready, self-hosted data platform on AWS in minutes. The installer automates:
+- **Compute**: Amazon EKS cluster with **Karpenter** for high-efficiency autoscaling (including Spot instances).
+- **Storage**: Amazon S3 buckets configured for high-throughput data ingestion.
+- **Networking**: AWS Application Load Balancer (ALB) integrated with **AWS Certificate Manager (ACM)** for automated TLS.
+- **Security**: IAM Pod Identity for secure, least-privilege access to AWS resources.
 
-## Workflow
+## Deployment Workflow
 
-0. **Docker Shell (Recommended)**: Launch the pre-configured toolbox containing all necessary CLI tools.
+0. **Docker Shell (Recommended)**: Launch the pre-configured toolbox containing all necessary CLI tools (`aws`, `kubectl`, `helm`, `eksctl`).
    ```bash
    ./start-docker-shell.sh
    ```
 1. **Pre-configuration (SSL)**: Request your SSL certificate in AWS Certificate Manager.
    - See [ACM Setup Guide](ACM_SETUP.md) for detailed instructions.
    - **Keep your Certificate ARN handy**; you will need it for the preflight wizard.
-2. **Preflight**: Run the interactive wizard to verify your AWS environment. This will prompt you for your domain, namespace, and **Certificate ARN**.
+2. **Preflight Wizard**: Run the interactive script to verify your AWS environment and generate your configuration.
    ```bash
    ./preflight-lakehouse.sh
    ```
-3. **Install**: Deploy the entire Lakehouse stack. The installer will also generate a random administrative token and save it to a Kubernetes secret (`app-secret`).
+3. **Install**: Deploy the entire Lakehouse stack with a single command.
    ```bash
    source lakehouse-aws.env
    ./install-lakehouse.sh
    ```
-4. **Post-Installation (DNS)**: Wait for the AWS Load Balancer to be provisioned and then configure Route 53.
-   - **Watch for your Load Balancer address**:
-     ```bash
-     kubectl get ingress -n ingext -w
-     ```
-   - See [Route 53 Setup Guide](ROUTE53_SETUP.md) for detailed instructions on mapping your domain.
-5. **Cleanup**: Tear down all resources when they are no longer needed.
+4. **Post-Installation (DNS)**: Configure Route 53 once the ALB is provisioned.
+   - See [Route 53 Setup Guide](ROUTE53_SETUP.md) for mapping your domain.
+5. **Cleanup**: Systematically delete all resources to stop billing.
    ```bash
    source lakehouse-aws.env
    ./cleanup-lakehouse.sh
    ```
 
-## Infrastructure Guides
+## Infrastructure Configuration Guides
 
-For detailed step-by-step instructions on AWS infrastructure configuration, refer to these guides:
-- [ACM Certificate Setup](ACM_SETUP.md): Requesting and validating SSL certificates.
-- [Route 53 DNS Setup](ROUTE53_SETUP.md): Mapping your domain to the Application Load Balancer.
+For detailed, step-by-step instructions on AWS-specific setup, refer to:
+- [ACM Certificate Setup](ACM_SETUP.md): Requesting and validating public SSL certificates.
+- [Route 53 DNS Setup](ROUTE53_SETUP.md): Creating Alias A records for your Application Load Balancer.
 
-## Scripts
+## Included Scripts & Tools
 
-- `start-docker-shell.sh`: Launches a Docker container with all required tools and mounts your AWS credentials.
-- `preflight-lakehouse.sh`: Verifies AWS credentials, checks resource availability, and collects user input.
-- `install-lakehouse.sh`: Orchestrates the creation of EKS, S3, IAM roles, Karpenter, and all Ingext components.
-- `cleanup-lakehouse.sh`: Systematically removes all provisioned AWS and Kubernetes resources.
-- `lakehouse-status.sh`: Shows a two-column status report of all installed components and infrastructure.
-- `add-user-access.sh`: Grants an IAM user (e.g. `kun_develop`) administrative access to the cluster.
-- `lakehouse-logs.sh`: Quick access to error logs for any component (e.g. `./lakehouse-logs.sh api`).
+- `start-docker-shell.sh`: Secure Docker environment with all required cloud tools.
+- `preflight-lakehouse.sh`: Interactive environment validator and configuration generator.
+- `install-lakehouse.sh`: Master orchestrator for EKS, S3, IAM, and Helm deployments.
+- `cleanup-lakehouse.sh`: Safe teardown of all provisioned AWS infrastructure.
+- `lakehouse-status.sh`: Real-time health report for all components and pods.
+- `add-user-access.sh`: Quickly grant administrative cluster access to other IAM users.
+- `lakehouse-logs.sh`: Simple CLI for tailing logs from any component.
 
 ## Prerequisites
 
-- **AWS CLI** configured with appropriate permissions.
-- **eksctl**, **kubectl**, and **Helm** installed.
-- **Docker** (if running via the Ingext shell).
-- **DNS control** for your specified domain.
+- **AWS CLI** with programmatic access.
+- **DNS Control** for your domain (Route 53 recommended).
+- **Docker** (to use the pre-configured shell).
 
 ### How to Configure AWS CLI (Bridge from Web Login to CLI)
 
