@@ -209,10 +209,17 @@ kubectl create secret generic app-secret \
     --from-literal=token="tok_$random_str" \
     --dry-run=client -o yaml | kubectl apply -f -
 
-# refresh aws public ecr login (needed for Ingext images)
+# Ingext charts are hosted on AWS Public ECR. 
+# We try to refresh the login if AWS CLI is configured to avoid rate limits,
+# but we skip it if no credentials are found to allow pure Azure installs.
 if command -v aws >/dev/null 2>&1; then
-  log "Refreshing AWS ECR Public login..."
-  aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws || true
+  if aws sts get-caller-identity >/dev/null 2>&1; then
+    log "Refreshing AWS ECR Public login (for Helm charts)..."
+    aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws || true
+  else
+    log "AWS CLI not authenticated. Clearing stale tokens to allow anonymous pull..."
+    helm registry logout public.ecr.aws >/dev/null 2>&1 || true
+  fi
 fi
 
 helm upgrade --install ingext-stack oci://public.ecr.aws/ingext/ingext-stack -n "$NAMESPACE"

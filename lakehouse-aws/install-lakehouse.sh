@@ -29,6 +29,17 @@ log() {
   echo "==> $*"
 }
 
+# refresh aws public ecr login (needed for Ingext charts)
+if command -v aws >/dev/null 2>&1; then
+  if aws sts get-caller-identity >/dev/null 2>&1; then
+    log "Refreshing AWS ECR Public login..."
+    aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws || true
+  else
+    log "AWS CLI not authenticated. Clearing stale tokens to allow anonymous pull..."
+    helm registry logout public.ecr.aws >/dev/null 2>&1 || true
+  fi
+fi
+
 need() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "ERROR: missing dependency: $1"
@@ -104,7 +115,6 @@ eksctl create podidentityassociation \
 eksctl create addon --cluster "$CLUSTER_NAME" --name aws-ebs-csi-driver --region "$AWS_REGION" 2>/dev/null || true
 
 # StorageClass
-aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws
 helm upgrade --install ingext-aws-gp3 oci://public.ecr.aws/ingext/ingext-aws-gp3 -n kube-system
 
 # Mountpoint for S3 CSI
