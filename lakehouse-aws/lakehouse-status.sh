@@ -3,7 +3,7 @@
 set -uo pipefail
 
 ###############################################################################
-# Lakehouse Status Checker
+# AWS Lakehouse Status Checker
 #
 # Shows the status of all installed components in a clean two-column format.
 ###############################################################################
@@ -35,9 +35,9 @@ echo "------------------------------------------------------------------------"
 # 1. Infrastructure Status
 get_status_color() {
   local status="$1"
-  if [[ "$status" == "ACTIVE" ]] || [[ "$status" == "Running" ]] || [[ "$status" == "EXISTS" ]]; then
+  if [[ "$status" == "ACTIVE" ]] || [[ "$status" == "Running" ]] || [[ "$status" == "EXISTS" ]] || [[ "$status" == "ALB_READY" ]]; then
     echo -e "${GREEN}${status}${NC}"
-  elif [[ "$status" == "CREATING" ]] || [[ "$status" == "PROVISIONING..." ]]; then
+  elif [[ "$status" == "CREATING" ]] || [[ "$status" == "PROVISIONING..." ]] || [[ "$status" == "PENDING" ]]; then
     echo -e "${YELLOW}${status}${NC}"
   else
     echo -e "${RED}${status}${NC}"
@@ -118,13 +118,32 @@ check_pod_status "lake-mgr" "Lake Manager"
 check_pod_status "search-service" "Lake Search"
 check_pod_status "lake-worker" "Lake Worker"
 
+# 4. Networking & SSL
 echo ""
-echo "[Networking]"
+echo "[Networking & SSL]"
 # Ingress Address
-ALB_ADDR=$(kubectl get ingress -n "$NAMESPACE" -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "PROVISIONING...")
-printf "$FORMAT" "AWS Load Balancer" "$(get_status_color "$ALB_ADDR")"
+ALB_ADDR=$(kubectl get ingress -n "$NAMESPACE" -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+if [[ -n "$ALB_ADDR" ]]; then
+  printf "$FORMAT" "AWS Load Balancer" "${GREEN}$ALB_ADDR${NC}"
+else
+  printf "$FORMAT" "AWS Load Balancer" "${YELLOW}PROVISIONING...${NC}"
+fi
 printf "$FORMAT" "DNS Domain" "$SITE_DOMAIN"
 
+# ACM Cert status (if ARN provided)
+if [[ -n "${CERT_ARN:-}" ]]; then
+  ACM_STATUS=$(aws acm describe-certificate --certificate-arn "$CERT_ARN" --query 'Certificate.Status' --output text 2>/dev/null || echo "ERROR")
+  if [[ "$ACM_STATUS" == "ISSUED" ]]; then
+    printf "$FORMAT" "ACM Certificate" "${GREEN}Issued${NC}"
+  elif [[ "$ACM_STATUS" == "PENDING_VALIDATION" ]]; then
+    printf "$FORMAT" "ACM Certificate" "${YELLOW}Pending Validation${NC}"
+  else
+    printf "$FORMAT" "ACM Certificate" "${RED}$ACM_STATUS${NC}"
+  fi
+fi
+
+echo "------------------------------------------------------------------------"
+echo "Pod Summary: $(kubectl get pods -n "$NAMESPACE" --no-headers 2>/dev/null | grep -c "Running" || echo "0") running / $(kubectl get pods -n "$NAMESPACE" --no-headers 2>/dev/null | wc -l | tr -d ' ') total"
 echo "========================================================================"
 echo ""
 echo "💡 TIP: If components are 'NOT DEPLOYED' or stuck, check logs:"

@@ -123,9 +123,10 @@ echo ""
 echo "VM Size Selection for region '$LOCATION' (verifying with subscription)..."
 echo "  (This takes about 30 seconds to query Azure's allowed SKUs...)"
 
-# Fetch all allowed D-series VMs for this region in one go
+# Fetch all allowed VMs for this region in one go
+# We check for null restrictions AND empty list restrictions to be extra safe
 ALLOWED_SKUS=$(az vm list-skus -l "$LOCATION" --resource-type virtualMachines \
-  --query "[?(restrictions==null || length(restrictions) == \`0\`) && contains(name, 'Standard_D')].name" -o tsv 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")
+  --query "[?(restrictions==null || length(restrictions) == \`0\`) && to_number(capabilities[?name=='vCPUs'].value | [0]) >= \`2\`].name" -o tsv 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")
 
 # Helper to find the first candidate that exists in the allowed list
 find_allowed() {
@@ -141,9 +142,10 @@ find_allowed() {
 }
 
 # Candidate lists (ordered by preference)
-SMALL_CANDS=("Standard_D2as_v5" "Standard_D2as_v4" "Standard_D2s_v5" "Standard_D2s_v4" "Standard_D2a_v4")
-MEDIUM_CANDS=("Standard_D4as_v5" "Standard_D4as_v4" "Standard_D4s_v5" "Standard_D4s_v4" "Standard_D4a_v4")
-LARGE_CANDS=("Standard_D8as_v5" "Standard_D8as_v4" "Standard_D8s_v5" "Standard_D8s_v4" "Standard_D8a_v4")
+# We prioritize the "s" series (Intel) as it's more universally available than "as" (AMD)
+SMALL_CANDS=("Standard_D2s_v6" "Standard_D2s_v5" "Standard_D2s_v4" "Standard_D2as_v5" "Standard_D2as_v4" "Standard_D2a_v4")
+MEDIUM_CANDS=("Standard_D4s_v6" "Standard_D4s_v5" "Standard_D4s_v4" "Standard_D4as_v5" "Standard_D4as_v4" "Standard_D4a_v4")
+LARGE_CANDS=("Standard_D8s_v6" "Standard_D8s_v5" "Standard_D8s_v4" "Standard_D8as_v5" "Standard_D8as_v4" "Standard_D8a_v4")
 
 SMALL_SKU=$(find_allowed "${SMALL_CANDS[@]}" || echo "Standard_D2as_v4")
 MEDIUM_SKU=$(find_allowed "${MEDIUM_CANDS[@]}" || echo "Standard_D4as_v4")
@@ -222,6 +224,11 @@ export CERT_EMAIL="$CERT_EMAIL"
 export NAMESPACE="$NAMESPACE"
 export NODE_VM_SIZE="$NODE_VM_SIZE"
 export NODE_COUNT="$NODE_COUNT"
+
+# Self-reported readiness (for support/debugging)
+export PREFLIGHT_HAS_BILLING="$HAS_BILLING"
+export PREFLIGHT_HAS_OWNER="$HAS_OWNER"
+export PREFLIGHT_HAS_DNS="$HAS_DNS"
 EOF
 
 chmod +x "$OUTPUT_ENV"

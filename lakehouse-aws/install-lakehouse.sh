@@ -41,6 +41,14 @@ for bin in aws eksctl kubectl helm; do
   need "$bin"
 done
 
+wait_ns_pods_ready() {
+  local ns="$1"
+  local timeout="${2:-900s}"
+  log "Waiting for pods in namespace '$ns' to be Ready (timeout $timeout)"
+  kubectl wait --for=condition=Ready pods --all -n "$ns" --timeout="$timeout" || true
+  kubectl get pods -n "$ns" -o wide || true
+}
+
 # -------- 2. Deployment Summary --------
 cat <<EOF
 
@@ -172,8 +180,7 @@ helm upgrade --install ingext-stack oci://public.ecr.aws/ingext/ingext-stack -n 
 helm upgrade --install etcd-single oci://public.ecr.aws/ingext/etcd-single -n "$NAMESPACE"
 helm upgrade --install etcd-single-cronjob oci://public.ecr.aws/ingext/etcd-single-cronjob -n "$NAMESPACE"
 
-log "Waiting 60 seconds for database services..."
-sleep 60
+wait_ns_pods_ready "$NAMESPACE" "600s"
 
 # -------- 7. Phase 5: Application (Stream) --------
 log "Phase 5: Application - Installing Ingext Stream..."
@@ -182,6 +189,8 @@ helm upgrade --install ingext-community-config oci://public.ecr.aws/ingext/ingex
 
 helm upgrade --install ingext-community-init oci://public.ecr.aws/ingext/ingext-community-init -n "$NAMESPACE"
 helm upgrade --install ingext-community oci://public.ecr.aws/ingext/ingext-community -n "$NAMESPACE"
+
+wait_ns_pods_ready "$NAMESPACE" "900s"
 
 # -------- 8. Phase 6: Application (Datalake) --------
 log "Phase 6: Application - Installing Ingext Datalake..."
