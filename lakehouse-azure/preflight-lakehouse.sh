@@ -125,8 +125,11 @@ echo "  (This takes about 30 seconds to query Azure's allowed SKUs...)"
 
 # Fetch all allowed VMs for this region in one go
 # We check for null restrictions AND empty list restrictions to be extra safe
+# Fetch all VMs for this region that have at least 2 vCPUs
+# We ignore the 'restrictions' field here because SKUs with zonal restrictions 
+# are often still available for AKS.
 ALLOWED_SKUS=$(az vm list-skus -l "$LOCATION" --resource-type virtualMachines \
-  --query "[?(restrictions==null || length(restrictions) == \`0\`) && to_number(capabilities[?name=='vCPUs'].value | [0]) >= \`2\`].name" -o tsv 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")
+  --query "[?capabilities[?name=='vCPUs' && to_number(value) >= \`2\`]].name" -o tsv 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")
 
 # Helper to find the first candidate that exists in the allowed list
 find_allowed() {
@@ -141,11 +144,11 @@ find_allowed() {
   return 1
 }
 
-# Candidate lists (ordered by preference)
-# We prioritize the "s" series (Intel) as it's more universally available than "as" (AMD)
-SMALL_CANDS=("Standard_D2s_v6" "Standard_D2s_v5" "Standard_D2s_v4" "Standard_D2as_v5" "Standard_D2as_v4" "Standard_D2a_v4")
-MEDIUM_CANDS=("Standard_D4s_v6" "Standard_D4s_v5" "Standard_D4s_v4" "Standard_D4as_v5" "Standard_D4as_v4" "Standard_D4a_v4")
-LARGE_CANDS=("Standard_D8s_v6" "Standard_D8s_v5" "Standard_D8s_v4" "Standard_D8as_v5" "Standard_D8as_v4" "Standard_D8a_v4")
+# Candidate lists (ordered by most likely to be allowed)
+# We prioritize s_v4/v5 as they are the most compatible
+SMALL_CANDS=("Standard_D2s_v4" "Standard_D2s_v5" "Standard_D2_v4" "Standard_D2_v3" "Standard_D2as_v5")
+MEDIUM_CANDS=("Standard_D4s_v4" "Standard_D4s_v5" "Standard_D4_v4" "Standard_D4_v3" "Standard_D4as_v5")
+LARGE_CANDS=("Standard_D8s_v4" "Standard_D8s_v5" "Standard_D8_v4" "Standard_D8_v3" "Standard_D8as_v5")
 
 SMALL_SKU=$(find_allowed "${SMALL_CANDS[@]}" || echo "Standard_D2as_v4")
 MEDIUM_SKU=$(find_allowed "${MEDIUM_CANDS[@]}" || echo "Standard_D4as_v4")
