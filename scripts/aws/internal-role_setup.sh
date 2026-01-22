@@ -4,24 +4,23 @@
 # Script: internal-role_setup.sh
 # Purpose: Sets up IAM Role Chaining within the same AWS account.
 # Usage: 
-#   File: ./internal-role_setup.sh <profile> <src_role> <tgt_role> <policy_file>
-#   Pipe: ./s3_gen.sh ... | ./internal-role_setup.sh <profile> <src_role> <tgt_role> -
+#   File: ./internal-role_setup.sh <profile> <tgt_role> <policy_file>
+#   Pipe: ./s3_gen.sh ... | ./internal-role_setup.sh <profile> <tgt_role> -
 # ==============================================================================
 
 set -e
 set -o pipefail
 
 # 1. Input Validation
-if [ "$#" -ne 4 ]; then
-    echo "Usage: $0 <profile> <source_role_name> <target_role_name> <policy_file_or_dash>"
-    echo "Example: ./s3_gen.sh my-bucket | $0 default ingext-sa-role IngextS3AccessRole -"
+if [ "$#" -ne 3 ]; then
+    echo "Usage: $0 <profile> <target_role_name> <policy_file_or_dash>"
+    echo "Example: ./s3_gen.sh my-bucket | $0 default IngextS3AccessRole -"
     exit 1
 fi
 
 PROFILE=$1
-SOURCE_ROLE_NAME=$2
-TARGET_ROLE_NAME=$3
-POLICY_ARG=$4
+TARGET_ROLE_NAME=$2
+POLICY_ARG=$3
 
 # --- NEW LOGIC: Handle Pipe Input ---
 TEMP_POLICY_JSON="temp_policy_internal.json"
@@ -48,6 +47,11 @@ else
 fi
 # -------------------------------------
 
+POD_ROLE_NAME=$(ingext eks get-pod-role)
+
+echo "Pod Role: $POD_ROLE_NAME"
+
+
 echo "--- Starting IAM Setup ---"
 
 # 2. Get AWS Account ID
@@ -72,7 +76,7 @@ cat > "$TRUST_POLICY_FILE" <<EOF
     {
       "Effect": "Allow",
       "Principal": {
-        "AWS": "arn:aws:iam::${ACCOUNT_ID}:role/${SOURCE_ROLE_NAME}"
+        "AWS": "arn:aws:iam::${ACCOUNT_ID}:role/${POD_ROLE_NAME}"
       },
       "Action": ["sts:AssumeRole","sts:TagSession"]
     }
@@ -86,6 +90,13 @@ aws iam create-role \
     --role-name "$TARGET_ROLE_NAME" \
     --assume-role-policy-document file://"$TRUST_POLICY_FILE" \
     --profile "$PROFILE" > /dev/null 2>&1
+
+echo "Waiting for role creation to propagate..."
+    
+aws iam wait role-exists \
+    --role-name "$TARGET_ROLE_NAME" \
+    --profile "$PROFILE"
+
 
 if [ $? -eq 0 ]; then
     echo "    Role created successfully."
@@ -120,9 +131,9 @@ cat > "$ASSUME_POLICY_FILE" <<EOF
 }
 EOF
 
-echo ">>> Updating Source Role '$SOURCE_ROLE_NAME'..."
+echo ">>> Updating Source Role '$POD_ROLE_NAME'..."
 aws iam put-role-policy \
-    --role-name "$SOURCE_ROLE_NAME" \
+    --role-name "$POD_ROLE_NAME" \
     --policy-name "AllowAssume-${TARGET_ROLE_NAME}" \
     --policy-document file://"$ASSUME_POLICY_FILE" \
     --profile "$PROFILE"
@@ -133,4 +144,4 @@ rm "$TRUST_POLICY_FILE" "$ASSUME_POLICY_FILE" "$TEMP_POLICY_JSON"
 echo "--- Setup Complete ---"
 echo "1. Created/Updated Role: $TARGET_ROLE_NAME"
 echo "2. Attached Policy (from input)"
-echo "3. Authorized '$SOURCE_ROLE_NAME' to assume '$TARGET_ROLE_NAME'"
+echo "3. Authorized '$POD_ROLE_NAME' to assume '$TARGET_ROLE_NAME'"

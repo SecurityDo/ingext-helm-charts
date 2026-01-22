@@ -4,8 +4,8 @@
 # Script: external-role_setup.sh (v2 - Pipe Support)
 # Purpose: Sets up Cross-Account IAM Role Chaining.
 # Usage: 
-#   File: ./external-role_setup.sh <local_profile> <ingext-sa-role> <remote_profile> <remote_role> <iam_policy_file>
-#   OR Pipe: ./s3_gen.sh ... | ./external-role_setup.sh external-role_setup.sh <local_profile> <ingext-sa-role> <remote_profile> <remote_role> -
+#   File: ./external-role_setup.sh <local_profile> <remote_profile> <remote_role> <iam_policy_file>
+#   OR Pipe: ./s3_gen.sh ... | ./external-role_setup.sh <local_profile> <remote_profile> <remote_role> -
 # ==============================================================================
 
 # 1. FAIL-FAST CONFIGURATION
@@ -14,18 +14,17 @@
 set -e
 set -o pipefail
 
-if [ "$#" -ne 5 ]; then
-    echo "Usage: $0 <local_profile> <ingext-sa-role> <remote_profile> <remote_role> <policy_file_or_dash>"
-    echo "Example: $0 ingext-prod ingext-sa-role customer-dev IngextS3AccessRole s3-policy.json"
-    echo "        policy_gen.sh ... | $0 ingext-prod ingext-sa-role customer-dev IngextS3AccessRole -" 
+if [ "$#" -ne 4 ]; then
+    echo "Usage: $0 <local_profile> <remote_profile> <remote_role> <policy_file_or_dash>"
+    echo "Example: $0 ingext-prod customer-dev IngextS3AccessRole s3-policy.json"
+    echo "        policy_gen.sh ... | $0 ingext-prod customer-dev IngextS3AccessRole -" 
     exit 1
 fi
 
 LOCAL_PROFILE=$1
-SOURCE_ROLE_NAME=$2
-REMOTE_PROFILE=$3
-TARGET_ROLE_NAME=$4
-POLICY_ARG=$5
+REMOTE_PROFILE=$2
+TARGET_ROLE_NAME=$3
+POLICY_ARG=$4
 
 # --- NEW LOGIC: Handle Pipe Input ---
 TEMP_POLICY_JSON="temp_policy_input.json"
@@ -51,6 +50,10 @@ else
 fi
 # -------------------------------------
 
+POD_ROLE_NAME=$(ingext eks get-pod-role)
+
+echo "Pod Role: $POD_ROLE_NAME"
+
 echo "--- Starting Cross-Account IAM Setup ---"
 
 # (Logic to get Account IDs remains the same - abbreviated for brevity)
@@ -67,7 +70,7 @@ cat > "$TRUST_POLICY_FILE" <<EOF
     {
       "Effect": "Allow",
       "Principal": {
-        "AWS": "arn:aws:iam::${LOCAL_ACCOUNT_ID}:role/${SOURCE_ROLE_NAME}"
+        "AWS": "arn:aws:iam::${LOCAL_ACCOUNT_ID}:role/${POD_ROLE_NAME}"
       },
       "Action": ["sts:AssumeRole","sts:TagSession"]
     }
@@ -76,8 +79,47 @@ cat > "$TRUST_POLICY_FILE" <<EOF
 EOF
 
 echo ">>> [Remote Account] Configuring Role '$TARGET_ROLE_NAME'..."
-aws iam create-role --role-name "$TARGET_ROLE_NAME" --assume-role-policy-document file://"$TRUST_POLICY_FILE" --profile "$REMOTE_PROFILE" > /dev/null 2>&1 || \
-aws iam update-assume-role-policy --role-name "$TARGET_ROLE_NAME" --policy-document file://"$TRUST_POLICY_FILE" --profile "$REMOTE_PROFILE"
+#aws iam create-role --role-name "$TARGET_ROLE_NAME" --assume-role-policy-document file://"$TRUST_POLICY_FILE" --profile "$REMOTE_PROFILE" > /dev/null 2>&1 || \
+#aws iam update-assume-role-policy --role-name "$TARGET_ROLE_NAME" --policy-document file://"$TRUST_POLICY_FILE" --profile "$REMOTE_PROFILE"
+
+
+# 1. Get the Account ID dynamically for the placeholder policy
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --profile "$REMOTE_PROFILE")
+
+# 2. Define a "Safe" Placeholder Policy (Trusts the Account Root)
+# This is always valid and allows us to create the role successfully.
+PLACEHOLDER_POLICY='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::'$ACCOUNT_ID':root"},"Action":"sts:AssumeRole"}]}'
+
+# 3. Check if the role exists
+if aws iam get-role --role-name "$TARGET_ROLE_NAME" --profile "$REMOTE_PROFILE" > /dev/null 2>&1; then
+    echo "Role '$TARGET_ROLE_NAME' exists."
+else
+    echo "Role '$TARGET_ROLE_NAME' does not exist. Creating with placeholder policy..."
+    # Create using the SAFE placeholder policy first
+    aws iam create-role \
+        --role-name "$TARGET_ROLE_NAME" \
+        --assume-role-policy-document "$PLACEHOLDER_POLICY" \
+        --profile "$REMOTE_PROFILE" > /dev/null 2>&1
+    
+    echo "Waiting for role creation to propagate..."
+    
+    aws iam wait role-exists \
+        --role-name "$TARGET_ROLE_NAME" \
+        --profile "$REMOTE_PROFILE"
+fi
+
+# 4. Always attempt to apply the REAL policy
+# If the referenced principal (ingext-rocky1logs-read) still doesn't exist, 
+# ONLY this step will fail, but the Role itself will remain created.
+echo "Applying actual Trust Policy from file..."
+aws iam update-assume-role-policy \
+    --role-name "$TARGET_ROLE_NAME" \
+    --policy-document file://"$TRUST_POLICY_FILE" \
+    --profile "$REMOTE_PROFILE"
+
+
+
+
 
 # --- UPDATED: Use the TEMP_POLICY_JSON ---
 echo ">>> [Remote Account] Attaching permissions..."
@@ -102,9 +144,9 @@ cat > "$ASSUME_POLICY_FILE" <<EOF
 }
 EOF
 
-echo ">>> [Local Account] Authorizing '$SOURCE_ROLE_NAME' to assume remote role..."
+echo ">>> [Local Account] Authorizing '$POD_ROLE_NAME' to assume remote role..."
 aws iam put-role-policy \
-    --role-name "$SOURCE_ROLE_NAME" \
+    --role-name "$POD_ROLE_NAME" \
     --policy-name "AllowAssume-${TARGET_ROLE_NAME}" \
     --policy-document file://"$ASSUME_POLICY_FILE" \
     --profile "$LOCAL_PROFILE"
@@ -113,7 +155,7 @@ aws iam put-role-policy \
 rm "$TRUST_POLICY_FILE" "$ASSUME_POLICY_FILE" "$TEMP_POLICY_JSON"
 
 echo "--- Setup Complete ---"
-echo "1. Source: arn:aws:iam::${LOCAL_ACCOUNT_ID}:role/${SOURCE_ROLE_NAME}"
+echo "1. Source: arn:aws:iam::${LOCAL_ACCOUNT_ID}:role/${POD_ROLE_NAME}"
 echo "2. Target: arn:aws:iam::${REMOTE_ACCOUNT_ID}:role/${TARGET_ROLE_NAME}"
 echo "3. Trust established successfully."
 
