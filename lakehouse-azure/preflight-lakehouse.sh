@@ -157,9 +157,9 @@ LARGE_SKU=$(find_allowed "${LARGE_CANDS[@]}" || echo "Standard_D8s_v6")
 echo "  ✅ Verification complete."
 echo ""
 echo "AKS Node Size Presets:"
-echo "  1) Small   - Testing / Dev        ($SMALL_SKU)"
-echo "  2) Medium  - Pilot / Light Prod   ($MEDIUM_SKU)  [recommended]"
-echo "  3) Large   - Production           ($LARGE_SKU)"
+echo "  1) Small   - Testing / Dev        ($SMALL_SKU)  [2 vCPU, 8GB RAM]"
+echo "  2) Medium  - Pilot / Light Prod   ($MEDIUM_SKU)  [4 vCPU, 16GB RAM]  (3 nodes = 12 vCPU)"
+echo "  3) Large   - Production           ($LARGE_SKU)  [8 vCPU, 32GB RAM]  (3 nodes = 24 vCPU)"
 echo "  4) Custom  - Enter manually"
 echo ""
 
@@ -171,7 +171,7 @@ case "$SIZE_CHOICE" in
   2) NODE_VM_SIZE="$MEDIUM_SKU"; NODE_COUNT_DEFAULT="3" ;;
   3) NODE_VM_SIZE="$LARGE_SKU";  NODE_COUNT_DEFAULT="3" ;;
   4)
-     read -rp "Enter AKS Node VM Size (e.g. Standard_D4as_v4): " NODE_VM_SIZE
+     read -rp "Enter AKS Node VM Size (e.g. Standard_D2s_v4): " NODE_VM_SIZE
      NODE_COUNT_DEFAULT="3"
      ;;
   *)
