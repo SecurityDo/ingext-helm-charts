@@ -164,17 +164,23 @@ prompt SITE_DOMAIN "Public Domain (e.g. ingext.example.com)" ""
 prompt CERT_EMAIL "Email for TLS certificate (Let's Encrypt)" ""
 prompt NAMESPACE "Kubernetes Namespace" "ingext" "true"
 
-# VM Size selection - show available sizes automatically
+# VM Size selection - show available sizes specifically for AKS
 echo ""
 echo "VM Size Selection for region '$LOCATION'..."
-TABLE_OUTPUT=$(az vm list-sizes --location "$LOCATION" --output table 2>/dev/null || echo "")
+# Try to get AKS-specific VM sizes first, fallback to filtered general sizes
+TABLE_OUTPUT=$(az aks list-locations --location "$LOCATION" --query "vmSizes" -o table 2>/dev/null || az vm list-sizes --location "$LOCATION" --output table 2>/dev/null || echo "")
 DEFAULT_VM_SIZE="Standard_D2s_v6"
 
 if [[ -n "$TABLE_OUTPUT" ]]; then
-  FILTERED=$(echo "$TABLE_OUTPUT" | grep -E "Standard_[DB][0-9]" | grep -E "s_v[23456]|ds_v[23456]" | head -n 10 || true)
+  # Filter to common sizes, prioritizing the D-series which is best for Ingext
+  FILTERED=$(echo "$TABLE_OUTPUT" | grep -E "Standard_D[0-9]|standard_d[0-9]" | head -n 15 || true)
   if [[ -n "$FILTERED" ]]; then
-    echo "Common available sizes (showing top 10):"
+    echo "Commonly supported AKS sizes in your region (prioritizing D-series):"
     echo "$FILTERED"
+    echo ""
+  else
+    echo "Could not find preferred D-series. Showing first 10 available sizes:"
+    echo "$TABLE_OUTPUT" | head -n 12
     echo ""
   fi
 fi
