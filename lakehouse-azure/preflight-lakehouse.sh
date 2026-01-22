@@ -116,34 +116,23 @@ prompt CERT_EMAIL "Email for TLS certificate (Let's Encrypt)" "chris@ingext.io"
 prompt NAMESPACE "Kubernetes Namespace" "ingext" "true"
 
 ###############################################################################
-# Fast VM size presets using targeted probes (avoids slow list of all SKUs)
+# Optimized VM size selection (one call to Azure, then local matching)
 ###############################################################################
 
-probe_sku_allowed() {
-  local location="$1"
-  local sku="$2"
-  local t="${3:-12}"
+echo ""
+echo "VM Size Selection for region '$LOCATION' (verifying with subscription)..."
+echo "  (This takes about 30 seconds to query Azure's allowed SKUs...)"
 
-  # Returns 0 if allowed, 1 otherwise.
-  # Uses a targeted query for just this SKU, and excludes restricted SKUs.
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "${t}s" az vm list-skus -l "$location" --resource-type virtualMachines \
-      --query "[?name=='$sku' && (restrictions==null || length(restrictions) == \`0\`)].name | [0]" -o tsv 2>/dev/null \
-      | grep -qi "^$sku$"
-  else
-    az vm list-skus -l "$location" --resource-type virtualMachines \
-      --query "[?name=='$sku' && (restrictions==null || length(restrictions) == \`0\`)].name | [0]" -o tsv 2>/dev/null \
-      | grep -qi "^$sku$"
-  fi
-}
+# Fetch all allowed D-series VMs for this region in one go
+ALLOWED_SKUS=$(az vm list-skus -l "$LOCATION" --resource-type virtualMachines \
+  --query "[?(restrictions==null || length(restrictions) == \`0\`) && contains(name, 'Standard_D')].name" -o tsv 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")
 
-pick_first_allowed() {
-  local location="$1"
-  shift
+# Helper to find the first candidate that exists in the allowed list
+find_allowed() {
   local candidates=("$@")
-
   for c in "${candidates[@]}"; do
-    if probe_sku_allowed "$location" "$c" 12; then
+    local c_lower=$(echo "$c" | tr '[:upper:]' '[:lower:]')
+    if echo "$ALLOWED_SKUS" | grep -qx "$c_lower" 2>/dev/null; then
       echo "$c"
       return 0
     fi
@@ -151,37 +140,16 @@ pick_first_allowed() {
   return 1
 }
 
-# Candidate lists (keep short, high-signal)
-SMALL_CANDIDATES=(
-  "Standard_D2as_v5" "Standard_D2as_v4"
-  "Standard_D2s_v5"  "Standard_D2s_v4"
-  "Standard_D2a_v4"
-)
+# Candidate lists (ordered by preference)
+SMALL_CANDS=("Standard_D2as_v5" "Standard_D2as_v4" "Standard_D2s_v5" "Standard_D2s_v4" "Standard_D2a_v4")
+MEDIUM_CANDS=("Standard_D4as_v5" "Standard_D4as_v4" "Standard_D4s_v5" "Standard_D4s_v4" "Standard_D4a_v4")
+LARGE_CANDS=("Standard_D8as_v5" "Standard_D8as_v4" "Standard_D8s_v5" "Standard_D8s_v4" "Standard_D8a_v4")
 
-MEDIUM_CANDIDATES=(
-  "Standard_D4as_v5" "Standard_D4as_v4"
-  "Standard_D4s_v5"  "Standard_D4s_v4"
-  "Standard_D4a_v4"
-)
+SMALL_SKU=$(find_allowed "${SMALL_CANDS[@]}" || echo "Standard_D2as_v4")
+MEDIUM_SKU=$(find_allowed "${MEDIUM_CANDS[@]}" || echo "Standard_D4as_v4")
+LARGE_SKU=$(find_allowed "${LARGE_CANDS[@]}" || echo "Standard_D8as_v4")
 
-LARGE_CANDIDATES=(
-  "Standard_D8as_v5" "Standard_D8as_v4"
-  "Standard_D8s_v5"  "Standard_D8s_v4"
-  "Standard_D8a_v4"
-)
-
-echo ""
-echo "VM Size Selection for region '$LOCATION' (fast probe mode)..."
-
-SMALL_SKU="$(pick_first_allowed "$LOCATION" "${SMALL_CANDIDATES[@]}" || true)"
-MEDIUM_SKU="$(pick_first_allowed "$LOCATION" "${MEDIUM_CANDIDATES[@]}" || true)"
-LARGE_SKU="$(pick_first_allowed "$LOCATION" "${LARGE_CANDIDATES[@]}" || true)"
-
-# Fallbacks if Azure is slow/unreachable
-SMALL_SKU="${SMALL_SKU:-Standard_D2as_v4}"
-MEDIUM_SKU="${MEDIUM_SKU:-Standard_D4as_v4}"
-LARGE_SKU="${LARGE_SKU:-Standard_D8as_v4}"
-
+echo "  ✅ Verification complete."
 echo ""
 echo "AKS Node Size Presets:"
 echo "  1) Small   - Testing / Dev        ($SMALL_SKU)"
@@ -190,7 +158,7 @@ echo "  3) Large   - Production           ($LARGE_SKU)"
 echo "  4) Custom  - Enter manually"
 echo ""
 
-read -rp "Select node size [1-4] (default 2): " SIZE_CHOICE
+read -rp "Select node size 1-4 [default 2]: " SIZE_CHOICE
 SIZE_CHOICE="${SIZE_CHOICE:-2}"
 
 case "$SIZE_CHOICE" in
