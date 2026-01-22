@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # ==============================================================================
-# Script: internal-role_setup.sh
+# Script: internal-role_setup.sh (v3 - Enhanced Workflow)
 # Purpose: Sets up IAM Role Chaining within the same AWS account.
 # Usage: 
-#   File: ./internal-role_setup.sh <profile> <tgt_role> <policy_file>
-#   Pipe: ./s3_gen.sh ... | ./internal-role_setup.sh <profile> <tgt_role> -
+#   File: ./internal-role_setup.sh <profile> <target_role_name> <policy_file>
+#   Pipe: cat policy.json | ./internal-role_setup.sh <profile> <target_role_name> -
 # ==============================================================================
 
 set -e
@@ -22,39 +22,37 @@ PROFILE=$1
 TARGET_ROLE_NAME=$2
 POLICY_ARG=$3
 
-# --- NEW LOGIC: Handle Pipe Input ---
+# --- 2. Validate Role Name ---
+# AWS Role names must be alphanumeric, including the following common characters: _+=,.@-
+if [[ ! "$TARGET_ROLE_NAME" =~ ^[a-zA-Z0-9_+=,.@-]{1,64}$ ]]; then
+    echo "Error: '$TARGET_ROLE_NAME' is not a valid AWS Role name."
+    echo "Allowed characters: Alphanumeric and _+=,.@-"
+    exit 1
+fi
+
+# --- 3. Handle Input (File vs Pipe) ---
 TEMP_POLICY_JSON="temp_policy_internal.json"
 
 if [ "$POLICY_ARG" == "-" ]; then
-    # Read from Stdin into a temp file
     echo ">>> Reading policy from Standard Input (pipe)..."
     cat > "$TEMP_POLICY_JSON"
-    
-    # Validate that we actually got data
     if [ ! -s "$TEMP_POLICY_JSON" ]; then
         echo "Error: No input received from pipe."
         rm "$TEMP_POLICY_JSON"
         exit 1
     fi
 else
-    # It's a file path
     if [ ! -f "$POLICY_ARG" ]; then
         echo "Error: Policy file '$POLICY_ARG' not found."
         exit 1
     fi
-    # Copy to temp file for consistent processing
     cp "$POLICY_ARG" "$TEMP_POLICY_JSON"
 fi
-# -------------------------------------
 
+# --- 4. Identify Context ---
 POD_ROLE_NAME=$(ingext eks get-pod-role)
-
 echo "Pod Role: $POD_ROLE_NAME"
 
-
-echo "--- Starting IAM Setup ---"
-
-# 2. Get AWS Account ID
 echo ">>> Fetching AWS Account ID using profile '$PROFILE'..."
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --profile "$PROFILE")
 
@@ -63,12 +61,13 @@ if [ -z "$ACCOUNT_ID" ]; then
     rm "$TEMP_POLICY_JSON"
     exit 1
 fi
-
 echo "    Account ID: $ACCOUNT_ID"
 
-# 3. Create Trust Policy (Temporary File)
-TRUST_POLICY_FILE="trust-policy-temp.json"
+# --- 5. Target Role Setup ---
+ROLE_WAS_CREATED=false
 
+# Construct Trust Policy (Allowing Pod Role to assume Target Role)
+TRUST_POLICY_FILE="trust-policy-temp.json"
 cat > "$TRUST_POLICY_FILE" <<EOF
 {
   "Version": "2012-10-17",
@@ -84,39 +83,45 @@ cat > "$TRUST_POLICY_FILE" <<EOF
 }
 EOF
 
-# 4. Create the New Role (Target Role)
-echo ">>> Creating role '$TARGET_ROLE_NAME'..."
-aws iam create-role \
-    --role-name "$TARGET_ROLE_NAME" \
-    --assume-role-policy-document file://"$TRUST_POLICY_FILE" \
-    --profile "$PROFILE" > /dev/null 2>&1
+echo ">>> Checking Role '$TARGET_ROLE_NAME'..."
 
-echo "Waiting for role creation to propagate..."
-    
-aws iam wait role-exists \
-    --role-name "$TARGET_ROLE_NAME" \
-    --profile "$PROFILE"
-
-
-if [ $? -eq 0 ]; then
-    echo "    Role created successfully."
+if aws iam get-role --role-name "$TARGET_ROLE_NAME" --profile "$PROFILE" > /dev/null 2>&1; then
+    echo "    Role already exists. Skipping creation."
 else
-    echo "    Role might already exist. Updating trust policy..."
-    aws iam update-assume-role-policy \
+    echo "    Role does not exist. Creating..."
+    
+    # Create with "Safe" Placeholder Policy (Trust Root)
+    # This prevents errors if the referencing principal (Pod Role) has issues.
+    PLACEHOLDER_POLICY='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::'$ACCOUNT_ID':root"},"Action":"sts:AssumeRole"}]}'
+
+    aws iam create-role \
         --role-name "$TARGET_ROLE_NAME" \
-        --policy-document file://"$TRUST_POLICY_FILE" \
-        --profile "$PROFILE"
+        --assume-role-policy-document "$PLACEHOLDER_POLICY" \
+        --profile "$PROFILE" > /dev/null
+
+    echo "    Waiting for role to propagate..."
+    aws iam wait role-exists --role-name "$TARGET_ROLE_NAME" --profile "$PROFILE"
+    
+    ROLE_WAS_CREATED=true
 fi
 
-# 5. Attach Permissions to the New Role (Using TEMP_POLICY_JSON)
-echo ">>> Attaching permissions to '$TARGET_ROLE_NAME'..."
+# Update Trust Policy to the real one (Local Pod Role)
+echo "    Updating Trust Policy..."
+aws iam update-assume-role-policy \
+    --role-name "$TARGET_ROLE_NAME" \
+    --policy-document file://"$TRUST_POLICY_FILE" \
+    --profile "$PROFILE"
+
+# Attach Permissions to the Target Role
+echo "    Attaching permissions..."
 aws iam put-role-policy \
     --role-name "$TARGET_ROLE_NAME" \
     --policy-name "${TARGET_ROLE_NAME}-Permissions" \
     --policy-document file://"$TEMP_POLICY_JSON" \
     --profile "$PROFILE"
 
-# 6. Update Source Role (ingext-sa-role) to allow assuming the New Role
+# --- 6. Update Source Role (Pod Role) ---
+# Authorize the Pod Role to assume the Target Role
 ASSUME_POLICY_FILE="assume-policy-temp.json"
 cat > "$ASSUME_POLICY_FILE" <<EOF
 {
@@ -138,10 +143,15 @@ aws iam put-role-policy \
     --policy-document file://"$ASSUME_POLICY_FILE" \
     --profile "$PROFILE"
 
-# 7. Cleanup
-rm "$TRUST_POLICY_FILE" "$ASSUME_POLICY_FILE" "$TEMP_POLICY_JSON"
+# --- 7. Verification & Registration ---
+TARGET_ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${TARGET_ROLE_NAME}"
+echo ">>> Verifying connectivity..."
 
-echo "--- Setup Complete ---"
-echo "1. Created/Updated Role: $TARGET_ROLE_NAME"
-echo "2. Attached Policy (from input)"
-echo "3. Authorized '$POD_ROLE_NAME' to assume '$TARGET_ROLE_NAME'"
+# Verify assumption capability
+TEST_RESULT=$(ingext eks test-assumed-role --roleArn "$TARGET_ROLE_ARN")
+
+if [ "$TEST_RESULT" == "OK" ]; then
+    echo "    Verification Successful: OK"
+else
+    echo "    Verification Failed!"
+    echo "    Output

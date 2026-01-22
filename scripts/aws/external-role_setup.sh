@@ -1,23 +1,19 @@
 #!/bin/bash
 
 # ==============================================================================
-# Script: external-role_setup.sh (v2 - Pipe Support)
-# Purpose: Sets up Cross-Account IAM Role Chaining.
+# Script: external-role_setup.sh (v3 - Enhanced Workflow)
+# Purpose: Sets up Cross-Account IAM Role Chaining with Validation & Registration.
 # Usage: 
 #   File: ./external-role_setup.sh <local_profile> <remote_profile> <remote_role> <iam_policy_file>
-#   OR Pipe: ./s3_gen.sh ... | ./external-role_setup.sh <local_profile> <remote_profile> <remote_role> -
+#   Pipe: cat policy.json | ./external-role_setup.sh <local_profile> <remote_profile> <remote_role> -
 # ==============================================================================
 
-# 1. FAIL-FAST CONFIGURATION
-# set -e: Exit immediately if a command exits with a non-zero status.
-# set -o pipefail: specific for pipelines (optional but good practice)
 set -e
 set -o pipefail
 
 if [ "$#" -ne 4 ]; then
     echo "Usage: $0 <local_profile> <remote_profile> <remote_role> <policy_file_or_dash>"
     echo "Example: $0 ingext-prod customer-dev IngextS3AccessRole s3-policy.json"
-    echo "        policy_gen.sh ... | $0 ingext-prod customer-dev IngextS3AccessRole -" 
     exit 1
 fi
 
@@ -26,42 +22,44 @@ REMOTE_PROFILE=$2
 TARGET_ROLE_NAME=$3
 POLICY_ARG=$4
 
-# --- NEW LOGIC: Handle Pipe Input ---
+# --- 1. Validate Input Role Name ---
+# AWS Role names must be alphanumeric, including the following common characters: _+=,.@-
+if [[ ! "$TARGET_ROLE_NAME" =~ ^[a-zA-Z0-9_+=,.@-]{1,64}$ ]]; then
+    echo "Error: '$TARGET_ROLE_NAME' is not a valid AWS Role name."
+    echo "Allowed characters: Alphanumeric and _+=,.@-"
+    exit 1
+fi
+
+# --- 2. Handle Input (File vs Pipe) ---
 TEMP_POLICY_JSON="temp_policy_input.json"
 
 if [ "$POLICY_ARG" == "-" ]; then
-    # Read from Stdin into a temp file
-    echo ">>> Reading policy from Standard Input (pipe)..."
+    echo ">>> Reading policy from Standard Input..."
     cat > "$TEMP_POLICY_JSON"
-    # Validate that we actually got data
     if [ ! -s "$TEMP_POLICY_JSON" ]; then
         echo "Error: No input received from pipe."
         rm "$TEMP_POLICY_JSON"
         exit 1
     fi
 else
-    # It's a file path
     if [ ! -f "$POLICY_ARG" ]; then
         echo "Error: Policy file '$POLICY_ARG' not found."
         exit 1
     fi
-    # Copy to temp file to standardize processing
     cp "$POLICY_ARG" "$TEMP_POLICY_JSON"
 fi
-# -------------------------------------
 
+# --- 3. Identify Context ---
 POD_ROLE_NAME=$(ingext eks get-pod-role)
-
 echo "Pod Role: $POD_ROLE_NAME"
 
-echo "--- Starting Cross-Account IAM Setup ---"
-
-# (Logic to get Account IDs remains the same - abbreviated for brevity)
-# ... [Get LOCAL_ACCOUNT_ID and REMOTE_ACCOUNT_ID] ...
 LOCAL_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --profile "$LOCAL_PROFILE")
 REMOTE_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --profile "$REMOTE_PROFILE")
 
-# Create Trust Policy
+# --- 4. Remote Role Setup ---
+ROLE_WAS_CREATED=false
+
+# Construct the Trust Policy (Allowing the Local Pod Role to assume this Remote Role)
 TRUST_POLICY_FILE="trust-policy-cross-temp.json"
 cat > "$TRUST_POLICY_FILE" <<EOF
 {
@@ -78,58 +76,44 @@ cat > "$TRUST_POLICY_FILE" <<EOF
 }
 EOF
 
-echo ">>> [Remote Account] Configuring Role '$TARGET_ROLE_NAME'..."
-#aws iam create-role --role-name "$TARGET_ROLE_NAME" --assume-role-policy-document file://"$TRUST_POLICY_FILE" --profile "$REMOTE_PROFILE" > /dev/null 2>&1 || \
-#aws iam update-assume-role-policy --role-name "$TARGET_ROLE_NAME" --policy-document file://"$TRUST_POLICY_FILE" --profile "$REMOTE_PROFILE"
+echo ">>> [Remote Account] Checking Role '$TARGET_ROLE_NAME'..."
 
-
-# 1. Get the Account ID dynamically for the placeholder policy
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --profile "$REMOTE_PROFILE")
-
-# 2. Define a "Safe" Placeholder Policy (Trusts the Account Root)
-# This is always valid and allows us to create the role successfully.
-PLACEHOLDER_POLICY='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::'$ACCOUNT_ID':root"},"Action":"sts:AssumeRole"}]}'
-
-# 3. Check if the role exists
 if aws iam get-role --role-name "$TARGET_ROLE_NAME" --profile "$REMOTE_PROFILE" > /dev/null 2>&1; then
-    echo "Role '$TARGET_ROLE_NAME' exists."
+    echo "   Role already exists. Skipping creation."
 else
-    echo "Role '$TARGET_ROLE_NAME' does not exist. Creating with placeholder policy..."
-    # Create using the SAFE placeholder policy first
+    echo "   Role does not exist. Creating..."
+    
+    # Create with a safe placeholder policy first to avoid potential Principal errors
+    PLACEHOLDER_POLICY='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::'$REMOTE_ACCOUNT_ID':root"},"Action":"sts:AssumeRole"}]}'
+    
     aws iam create-role \
         --role-name "$TARGET_ROLE_NAME" \
         --assume-role-policy-document "$PLACEHOLDER_POLICY" \
-        --profile "$REMOTE_PROFILE" > /dev/null 2>&1
+        --profile "$REMOTE_PROFILE" > /dev/null
     
-    echo "Waiting for role creation to propagate..."
+    echo "   Waiting for role to propagate..."
+    aws iam wait role-exists --role-name "$TARGET_ROLE_NAME" --profile "$REMOTE_PROFILE"
     
-    aws iam wait role-exists \
-        --role-name "$TARGET_ROLE_NAME" \
-        --profile "$REMOTE_PROFILE"
+    ROLE_WAS_CREATED=true
 fi
 
-# 4. Always attempt to apply the REAL policy
-# If the referenced principal (ingext-rocky1logs-read) still doesn't exist, 
-# ONLY this step will fail, but the Role itself will remain created.
-echo "Applying actual Trust Policy from file..."
+# Update Trust Policy to the real one (Local Pod Role)
+echo "   Updating Trust Policy..."
 aws iam update-assume-role-policy \
     --role-name "$TARGET_ROLE_NAME" \
     --policy-document file://"$TRUST_POLICY_FILE" \
     --profile "$REMOTE_PROFILE"
 
-
-
-
-
-# --- UPDATED: Use the TEMP_POLICY_JSON ---
-echo ">>> [Remote Account] Attaching permissions..."
+# Attach the Input IAM Policy (Permissions)
+echo "   Attaching permission policy..."
 aws iam put-role-policy \
     --role-name "$TARGET_ROLE_NAME" \
     --policy-name "${TARGET_ROLE_NAME}-Permissions" \
     --policy-document file://"$TEMP_POLICY_JSON" \
     --profile "$REMOTE_PROFILE"
 
-# Update Source Role (Assume Policy)
+# --- 5. Local Account Setup ---
+# Allow the Pod Role to assume the Remote Role
 ASSUME_POLICY_FILE="assume-policy-cross-temp.json"
 cat > "$ASSUME_POLICY_FILE" <<EOF
 {
@@ -151,11 +135,38 @@ aws iam put-role-policy \
     --policy-document file://"$ASSUME_POLICY_FILE" \
     --profile "$LOCAL_PROFILE"
 
-# Cleanup
-rm "$TRUST_POLICY_FILE" "$ASSUME_POLICY_FILE" "$TEMP_POLICY_JSON"
+# --- 6. Verification & Registration ---
+REMOTE_ROLE_ARN="arn:aws:iam::${REMOTE_ACCOUNT_ID}:role/${TARGET_ROLE_NAME}"
+echo ">>> Verifying connectivity..."
+
+# Capture the output of the test command
+TEST_RESULT=$(ingext eks test-assumed-role --roleArn "$REMOTE_ROLE_ARN")
+
+if [ "$TEST_RESULT" == "OK" ]; then
+    echo "   Verification Successful: OK"
+else
+    echo "   Verification Failed!"
+    echo "   Output: $TEST_RESULT"
+    echo "   Aborting registration."
+    # Clean up temp files before exiting
+    rm -f "$TRUST_POLICY_FILE" "$ASSUME_POLICY_FILE" "$TEMP_POLICY_JSON"
+    exit 1
+fi
+
+# Only register if the role was newly created
+if [ "$ROLE_WAS_CREATED" = true ]; then
+    echo ">>> Registering new role with internal system..."
+    
+    # Execute registration and capture output
+    REG_OUTPUT=$(ingext eks add-assumed-role --name "${REMOTE_ACCOUNT_ID}:${TARGET_ROLE_NAME}" --roleArn "$REMOTE_ROLE_ARN")
+    
+    echo "   Registration Result: $REG_OUTPUT"
+else
+    echo ">>> Role was pre-existing. Skipping registration step."
+fi
+
+# --- Cleanup ---
+rm -f "$TRUST_POLICY_FILE" "$ASSUME_POLICY_FILE" "$TEMP_POLICY_JSON"
 
 echo "--- Setup Complete ---"
-echo "1. Source: arn:aws:iam::${LOCAL_ACCOUNT_ID}:role/${POD_ROLE_NAME}"
-echo "2. Target: arn:aws:iam::${REMOTE_ACCOUNT_ID}:role/${TARGET_ROLE_NAME}"
-echo "3. Trust established successfully."
-
+echo "Target Role ARN: $REMOTE_ROLE_ARN"
