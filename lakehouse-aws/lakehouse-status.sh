@@ -65,16 +65,20 @@ check_pod_status() {
   )
 
   for label in "${labels[@]}"; do
+    # Get phase
     status=$(kubectl get pods -n "$NAMESPACE" -l "$label" -o jsonpath='{.items[0].status.phase}' 2>/dev/null || true)
+    
     if [[ -n "$status" ]]; then
-      # Found it, now check readiness if it's running
       if [[ "$status" == "Running" ]]; then
-        # Use separate lines to avoid complex command substitution syntax errors in some shells
-        ready=$(kubectl get pods -n "$NAMESPACE" -l "$label" -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
-        if [[ "$ready" == "false" ]]; then
+        # Get readiness
+        local is_ready=""
+        is_ready=$(kubectl get pods -n "$NAMESPACE" -l "$label" -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null || echo "true")
+        
+        if [[ "$is_ready" == "false" ]]; then
           status="Starting (0/1)"
           color="$YELLOW"
         else
+          status="Running"
           color="$GREEN"
         fi
       elif [[ "$status" == "Pending" ]]; then
