@@ -168,32 +168,44 @@ prompt NAMESPACE "Kubernetes Namespace" "ingext" "true"
 # VM Size selection - show available sizes specifically for AKS
 echo ""
 echo "VM Size Selection for region '$LOCATION'..."
-# Try to get AKS-specific VM sizes first
-TABLE_OUTPUT=$(az aks list-locations --location "$LOCATION" --query "vmSizes" -o table 2>/dev/null || az vm list-sizes --location "$LOCATION" --output table 2>/dev/null || echo "")
+# 1. Get what the AKS service says is available in this region
+SERVICE_ALLOWED=$(az aks list-locations --location "$LOCATION" --query "vmSizes" -o tsv 2>/dev/null || echo "")
+
+# 2. Get what the Subscription actually allows (filters out Restricted SKUs)
+# This is the "Truth" for your specific account
+SUBSCRIPTION_ALLOWED=$(az vm list-skus --location "$LOCATION" --resource-type virtualMachines --query "[?capabilities[?name=='vCPUs' && value>'1']].name" -o tsv 2>/dev/null || echo "")
+
+# Intersection of Service and Subscription
+# We use a temp file or loop to find common entries
+ACTUAL_ALLOWED=""
+if [[ -n "$SERVICE_ALLOWED" && -n "$SUBSCRIPTION_ALLOWED" ]]; then
+  ACTUAL_ALLOWED=$(comm -12 <(echo "$SERVICE_ALLOWED" | tr '[:upper:]' '[:lower:]' | sort) <(echo "$SUBSCRIPTION_ALLOWED" | tr '[:upper:]' '[:lower:]' | sort))
+fi
+
 DEFAULT_VM_SIZE="Standard_D2s_v6"
 
-if [[ -n "$TABLE_OUTPUT" ]]; then
-  # Check if our default specifically exists in the allowed list
-  if echo "$TABLE_OUTPUT" | grep -qi "$DEFAULT_VM_SIZE"; then
-    echo "✅ Default size '$DEFAULT_VM_SIZE' is available in this region."
+if [[ -n "$ACTUAL_ALLOWED" ]]; then
+  # Check if our default specifically exists in the ACTUAL allowed list
+  if echo "$ACTUAL_ALLOWED" | grep -qi "$DEFAULT_VM_SIZE"; then
+    echo "✅ Default size '$DEFAULT_VM_SIZE' is available and allowed in your subscription."
   else
-    echo "⚠️  Note: Default '$DEFAULT_VM_SIZE' not found in immediate list. It may have a different name or be restricted."
+    echo "⚠️  Note: Default '$DEFAULT_VM_SIZE' is restricted or unavailable for your subscription."
+    # Try to find a safe alternative in the D series
+    SAFE_ALT=$(echo "$ACTUAL_ALLOWED" | grep -Ei "standard_d2s_v[345]" | head -n 1 || true)
+    if [[ -n "$SAFE_ALT" ]]; then
+      DEFAULT_VM_SIZE="$SAFE_ALT"
+      echo "   Suggested alternative: $DEFAULT_VM_SIZE"
+    fi
   fi
   echo ""
 
-  # Filter to common sizes, focusing on D-series (General Purpose)
-  # We show a mix of older and newer generations
-  FILTERED=$(echo "$TABLE_OUTPUT" | grep -Ei "Standard_D[0-9]+[as]*_v[456]" | head -n 20 || true)
-  
-  if [[ -n "$FILTERED" ]]; then
-    echo "Commonly supported AKS sizes (D-series v4, v5, v6):"
-    echo "$FILTERED"
-    echo ""
-  else
-    echo "Could not find specific D-series v4-v6. Showing first 15 available sizes:"
-    echo "$TABLE_OUTPUT" | head -n 15
-    echo ""
-  fi
+  echo "Commonly supported AKS sizes for your subscription (D-series):"
+  echo "$ACTUAL_ALLOWED" | grep -Ei "standard_d[0-9]s_v[3456]" | head -n 15 || echo "$ACTUAL_ALLOWED" | head -n 15
+  echo ""
+else
+  # Fallback to old behavior if comm or filtering fails
+  echo "⚠️  Could not perform strict subscription check. Showing general AKS sizes:"
+  az aks list-locations --location "$LOCATION" --query "vmSizes" -o table 2>/dev/null | head -n 15
 fi
 
 prompt NODE_VM_SIZE "AKS Node VM Size" "$DEFAULT_VM_SIZE"
