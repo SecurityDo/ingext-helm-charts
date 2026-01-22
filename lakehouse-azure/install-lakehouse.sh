@@ -86,7 +86,7 @@ if ! az aks show --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" >/dev
     --appgw-name "${CLUSTER_NAME}agw" \
     --appgw-subnet-cidr "10.225.0.0/16" 2>&1) || {
     
-    if echo "$AKS_OUTPUT" | grep -q "VM size.*is not allowed"; then
+    if echo "$AKS_OUTPUT" | grep -qiE "VM size.*is not (allowed|available)"; then
       echo ""
       echo "ERROR: VM size '$NODE_VM_SIZE' is not available for AKS in your subscription."
       echo ""
@@ -94,16 +94,20 @@ if ! az aks show --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" >/dev
       echo "The error message above shows the ACTUAL available sizes for AKS."
       echo ""
       
-      # Try to extract available sizes from the error message
-      AVAILABLE_SIZES=$(echo "$AKS_OUTPUT" | grep -oP "The available VM sizes are '[^']*'" | sed "s/The available VM sizes are '//;s/'$//" | tr ',' '\n' | sed 's/^[[:space:]]*//' | head -n 15 || true)
+      # Try to extract available sizes from the error message. 
+      # Azure error format: "... The available VM sizes are 'size1,size2,...'"
+      AVAILABLE_LIST=$(echo "$AKS_OUTPUT" | grep -oEi "available VM sizes are '[^']+'" | sed "s/.*'//;s/'.*//" | tr ',' '\n' | sort || true)
       
-      if [[ -n "$AVAILABLE_SIZES" ]]; then
+      if [[ -n "$AVAILABLE_LIST" ]]; then
         echo "Available VM sizes for AKS in your subscription:"
-        echo "$AVAILABLE_SIZES" | while read -r size; do
+        echo "$AVAILABLE_LIST" | while read -r size; do
           if [[ -n "$size" ]]; then echo "  - $size"; fi
-        done
+        done | head -n 20
         echo ""
-        echo "Please run preflight again and select a supported size."
+        echo "💡 RECOMMENDATION: Run preflight again and pick a size from the list above."
+      else
+        echo "Could not parse available sizes automatically. Here is the raw error:"
+        echo "$AKS_OUTPUT"
       fi
       exit 1
     else
