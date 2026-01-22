@@ -99,7 +99,8 @@ prompt() {
   if [[ "$sanitize" == "true" ]]; then
     val=$(echo "$val" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')
   fi
-  printf -v "$var_name" "%s" "$val"
+  # Use eval for maximum compatibility with all shells
+  eval "$var_name=\"\$val\""
 }
 
 prompt LOCATION "Azure Region" "eastus"
@@ -114,37 +115,39 @@ prompt SITE_DOMAIN "Public Domain" "lakehouse.k8.ingext.io"
 prompt CERT_EMAIL "Email for TLS certificate (Let's Encrypt)" "chris@ingext.io"
 prompt NAMESPACE "Kubernetes Namespace" "ingext" "true"
 
-# VM Size selection - THE HARD TRUTH
+# VM Size selection
 echo ""
-echo "VM Size Selection for region '$LOCATION' (Subscription Truth Check)..."
+echo "VM Size Selection for region '$LOCATION'..."
 
-# This query is the most accurate: it looks for SKUs that have NO restrictions (quota or policy blocks)
-# We also filter for vCPUs >= 2 to ensure the cluster can actually run Ingext.
-SUBSCRIPTION_TRUTH=$(az vm list-skus --location "$LOCATION" --resource-type virtualMachines --all --query "[?restrictions[0].type == null && capabilities[?name=='vCPUs' && value >= '2']].name" -o tsv 2>/dev/null | tr '[:upper:]' '[:lower:]' | sort || echo "")
+# Truthful "available to your subscription" list
+# We check for both null restrictions and empty list restrictions
+ALLOWED=$(
+  az vm list-skus -l "$LOCATION" --resource-type virtualMachines \
+    --query "[?(restrictions==null || length(restrictions) == \`0\`) && to_number(capabilities[?name=='vCPUs'].value | [0]) >= \`2\`].name" -o tsv 2>/dev/null || true
+)
 
-if [[ -n "$SUBSCRIPTION_TRUTH" ]]; then
-  echo "The following sizes are verified as ALLOWED for your subscription in '$LOCATION':"
+if [[ -n "$ALLOWED" ]]; then
+  echo "Commonly available sizes in your subscription (filtered):"
+  # D / Das / Dads / Ddsv / etc, v3-v6
+  # tr to lowercase for consistent regex matching
+  echo "$ALLOWED" \
+    | tr '[:upper:]' '[:lower:]' \
+    | grep -Ei '^(standard_)?d[0-9]+(a|as|ads|ad|d|p|pd|pld)?s?_v[3-6]$' \
+    | head -n 15
   
-  # Prioritize D-series, then B-series as fallback
-  D_SERIES=$(echo "$SUBSCRIPTION_TRUTH" | grep -Ei "^standard_d" | head -n 15 || true)
-  B_SERIES=$(echo "$SUBSCRIPTION_TRUTH" | grep -Ei "^standard_b" | head -n 10 || true)
-  
-  if [[ -n "$D_SERIES" ]]; then
-    echo "$D_SERIES"
-    # Set default to the first D-series we found that's at least v3/v4/v5/v6
-    DEFAULT_VM_SIZE=$(echo "$D_SERIES" | grep -Ei "_v[3456]" | head -n 1 || echo "$(echo "$D_SERIES" | head -n 1)")
-  elif [[ -n "$B_SERIES" ]]; then
-    echo "⚠️  Note: No D-series allowed. Showing B-series (Burstable):"
-    echo "$B_SERIES"
-    DEFAULT_VM_SIZE=$(echo "$B_SERIES" | head -n 1)
-  else
-    echo "$SUBSCRIPTION_TRUTH" | head -n 15
-    DEFAULT_VM_SIZE=$(echo "$SUBSCRIPTION_TRUTH" | head -n 1)
+  # Set a safe default if our previous default isn't in the list
+  DEFAULT_VM_SIZE="Standard_D2s_v5" # Usually more available than v6 in many regions
+  FOUND_IN_LIST=$(echo "$ALLOWED" | tr '[:upper:]' '[:lower:]' | grep -xiE "^(standard_)?${DEFAULT_VM_SIZE}$" || true)
+  if [[ -z "$FOUND_IN_LIST" ]]; then
+    # Pick the first allowed D-series
+    DEFAULT_VM_SIZE=$(echo "$ALLOWED" | tr '[:upper:]' '[:lower:]' | grep -Ei '^(standard_)?d[0-9]+' | head -n 1 || echo "$(echo "$ALLOWED" | head -n 1)")
+    # Convert back to ProperCase for display
+    DEFAULT_VM_SIZE=$(echo "$DEFAULT_VM_SIZE" | sed 's/^standard/Standard/' | sed 's/_v/_v/')
   fi
 else
-  echo "⚠️  WARNING: Could not verify subscription limits. Falling back to regional list."
-  DEFAULT_VM_SIZE="Standard_D2s_v6"
-  az vm list-sizes --location "$LOCATION" --query "[].name" -o tsv 2>/dev/null | head -n 15
+  echo "⚠️  Could not query subscription-available SKUs. Falling back to catalog list."
+  DEFAULT_VM_SIZE="Standard_D2as_v5"
+  az vm list-sizes -l "$LOCATION" --query "[?numberOfCores >= \`2\`].name" -o tsv 2>/dev/null | head -n 15
 fi
 
 echo ""
@@ -154,9 +157,9 @@ prompt NODE_COUNT "Initial Node Count" "3"
 # 3) Readiness Checklist
 echo ""
 echo "Permissions & Readiness Check:"
-prompt HAS_BILLING "Do you have active billing enabled? yes/no" "yes"
-prompt HAS_OWNER "Do you have Owner/Contributor permissions? yes/no" "yes"
-prompt HAS_DNS "Do you control DNS for '$SITE_DOMAIN'? yes/no" "yes"
+prompt HAS_BILLING "Do you have active billing enabled? (yes or no)" "yes"
+prompt HAS_OWNER "Do you have Owner/Contributor permissions? (yes or no)" "yes"
+prompt HAS_DNS "Do you control DNS for '$SITE_DOMAIN'? (yes or no)" "yes"
 
 # 4) Technical Checks
 echo ""
@@ -194,5 +197,5 @@ export NODE_COUNT="$NODE_COUNT"
 EOF
 
 chmod +x "$OUTPUT_ENV"
-echo "Done. Environment file written to: $OUTPUT_ENV"
+echo "Done. Next step: source $OUTPUT_ENV && ./install-lakehouse.sh"
 echo ""
