@@ -161,7 +161,7 @@ DEFAULT_STORAGE_ACCOUNT="ingextlake$(echo "$SUB_ID" | tr -d '-' | head -c 8)"
 prompt STORAGE_ACCOUNT "Storage Account Name (for Datalake)" "$DEFAULT_STORAGE_ACCOUNT" "true"
 prompt STORAGE_CONTAINER "Blob Container Name" "datalake" "true"
 
-prompt SITE_DOMAIN "Public Domain (e.g. lakehouse.k8.ingext.io)" ""
+prompt SITE_DOMAIN "Public Domain" "lakehouse.k8.ingext.io"
 prompt CERT_EMAIL "Email for TLS certificate (Let's Encrypt)" ""
 prompt NAMESPACE "Kubernetes Namespace" "ingext" "true"
 
@@ -226,7 +226,7 @@ az vm list-usage --location "$LOCATION" -o table 2>/dev/null | head -n 15 || ech
 
 echo ""
 echo "[Check] DNS Resolution"
-if command -v dig >/dev/null 2>&1; then
+if [[ -n "$SITE_DOMAIN" ]] && command -v dig >/dev/null 2>&1; then
   A_REC="$(dig +short A "$SITE_DOMAIN" | head -n 1 || true)"
   if [[ -n "$A_REC" ]]; then
     echo "  Current A record for $SITE_DOMAIN: $A_REC"

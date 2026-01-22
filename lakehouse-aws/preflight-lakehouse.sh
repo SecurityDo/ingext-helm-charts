@@ -164,7 +164,7 @@ prompt() {
 prompt AWS_REGION "AWS Region" "us-east-2"
 prompt CLUSTER_NAME "EKS Cluster Name" "ingext-lakehouse" "true"
 prompt S3_BUCKET "S3 Bucket Name (for Datalake)" "ingext-lakehouse-$ACCOUNT_ID" "true"
-prompt SITE_DOMAIN "Public Domain (e.g. lakehouse.k8.ingext.io)" ""
+prompt SITE_DOMAIN "Public Domain" "lakehouse.k8.ingext.io"
 prompt CERT_ARN "ACM Certificate ARN (Required for HTTPS)" "arn:aws:acm:us-east-2:..."
 prompt NAMESPACE "Kubernetes Namespace" "ingext" "true"
 
@@ -193,6 +193,17 @@ if [[ "$CLUSTER_STATUS" == "ACTIVE" ]]; then
   echo "  ✅ EKS Cluster '$CLUSTER_NAME' is ACTIVE."
 else
   echo "  ℹ️  EKS Cluster '$CLUSTER_NAME' not found or not active (will be created/updated)."
+fi
+
+echo ""
+echo "[Check] DNS Resolution"
+if [[ -n "$SITE_DOMAIN" ]] && command -v dig >/dev/null 2>&1; then
+  A_REC="$(dig +short A "$SITE_DOMAIN" | head -n 1 || true)"
+  if [[ -n "$A_REC" ]]; then
+    echo "  Current A record for $SITE_DOMAIN: $A_REC"
+  else
+    echo "  No A record found (expected for new setup)."
+  fi
 fi
 
 # 5) Write env file
