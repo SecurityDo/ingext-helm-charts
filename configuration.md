@@ -10,12 +10,13 @@
 ingext auth add-user --name admin@ingext.io --displayName "Ingext Admin" --role admin
 ```
 
-### Import processors from Ingext Community Git repository
+### Import processors and application templates from Ingext Community Git repository
 
 ```bash
 ingext import processor --type fpl_processor
 ingext import processor --type fpl_receiver
 ingext import processor --type fpl_packer
+ingext import application
 ```
 
 ### Add default datalake and index
@@ -73,9 +74,9 @@ ingext stream connect-router --router-id $routerID --source-id $srcID
 ```bash
 ingext application install --app Office365 \
   --instance $name \
-  --set tenantID="$tenantID" \
-  --set clientId="$clientId" \
-  --set clientSecret="$clientSecret"
+  --config tenantID="$tenantID" \
+  --config clientId="$clientId" \
+  --secret clientSecret="$clientSecret"
 ```
 
 ## Add AzureEventHubs event source
@@ -114,10 +115,10 @@ ingext stream connect-router --router-id $routerID --source-id $srcID
 ```bash
 ingext application install --app AzureEventHubs \
   --instance $name \
-  --set endpoint="$EH_CONN_STR" \
-  --set storageEndpoint="$STORAGE_CONN_STR" \
-  --set containerName="$CONTAINER_NAME" \
-  --set consumerGroup="$CONSUMER_GROUP"
+  --secret endpoint="$EH_CONN_STR" \
+  --secret storageEndpoint="$STORAGE_CONN_STR" \
+  --config containerName="$CONTAINER_NAME" \
+  --config consumerGroup="$CONSUMER_GROUP"
 ```
 
 ## Add GSuite audit event source
@@ -152,5 +153,5 @@ ingext integration add \
 ingext application install \
   --app GSuite \
   --instance SecurityDoAccount2 \
-  --set adminUserEmail="$adminUserEmail" \
-  --set serviceAccountKey="@ingext-reader-key.json"
+  --config adminUserEmail="$adminUserEmail" \
+  --secret serviceAccountKey="@ingext-reader-key.json"
