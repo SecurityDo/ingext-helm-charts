@@ -148,7 +148,8 @@ else
   log "Cluster '$CLUSTER_NAME' already exists. Skipping creation."
 fi
 
-az aks get-credentials --resource-group "$RESOURCE_GROUP" --name "$CLUSTER_NAME" --overwrite-existing
+az aks get-credentials --resource-group "$RESOURCE_GROUP" --name "$CLUSTER_NAME" --context "$CLUSTER_NAME"  --overwrite-existing
+
 
 # -------- 4. Phase 2: Storage (Storage Account & Workload Identity) --------
 log "Phase 2: Storage - Checking Storage Account '$STORAGE_ACCOUNT'..."
@@ -276,8 +277,15 @@ helm upgrade --install ingext-community-certissuer oci://public.ecr.aws/ingext/i
 helm upgrade --install ingext-ingress oci://public.ecr.aws/ingext/ingext-community-ingress-azure \
   -n "$NAMESPACE" --set "siteDomain=$SITE_DOMAIN"
 
+
+echo "save kubectl context for ingext cli..."
+ingext config set --cluster "$CLUSTER_NAME" --context "$CLUSTER_NAME" --provider aks --namespace $NAMESPACE
+
+
 log "========================================================"
 log "✅ Azure Lakehouse Installation Complete!"
 log "========================================================"
 echo "Next step: Configure your DNS A-record to the Application Gateway public IP."
 kubectl get ingress -n "$NAMESPACE"
+
+

@@ -209,10 +209,10 @@ helm upgrade --install ingext-lake-config oci://public.ecr.aws/ingext/ingext-lak
 
 # Node Pools via Karpenter
 helm upgrade --install ingext-merge-pool oci://public.ecr.aws/ingext/ingext-eks-pool \
-  --set poolName=poolmerge --set clusterName="$CLUSTER_NAME"
+  --set poolName=pool-merge --set clusterName="$CLUSTER_NAME"
 
 helm upgrade --install ingext-search-pool oci://public.ecr.aws/ingext/ingext-eks-pool \
-  --set poolName=poolsearch --set clusterName="$CLUSTER_NAME" --set cpuLimit=128 --set memoryLimit=512Gi
+  --set poolName=pool-search --set clusterName="$CLUSTER_NAME" --set cpuLimit=128 --set memoryLimit=512Gi
 
 helm upgrade --install ingext-manager-role oci://public.ecr.aws/ingext/ingext-manager-role -n "$NAMESPACE"
 helm upgrade --install ingext-s3-lake oci://public.ecr.aws/ingext/ingext-s3-lake -n "$NAMESPACE" \
@@ -251,6 +251,10 @@ helm upgrade --install ingext-ingress oci://public.ecr.aws/ingext/ingext-communi
   --set siteDomain="$SITE_DOMAIN" \
   --set certArn="$CERT_ARN" \
   --set loadBalancerName="albingext${CLUSTER_NAME}ingress"
+
+echo "save kubectl context for ingext cli..."
+ingext config set --cluster "$CLUSTER_NAME" --context "$CLUSTER_NAME" --provider eks --namespace $NAMESPACE
+
 
 log "========================================================"
 log "✅ Lakehouse Installation Complete!"
