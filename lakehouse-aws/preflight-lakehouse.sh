@@ -233,6 +233,7 @@ cat > "$OUTPUT_ENV" <<EOF
 #   source $OUTPUT_ENV
 #   ./install-lakehouse.sh
 
+export ACCOUNT_ID="$(printf '%s' "$ACCOUNT_ID")"
 export AWS_PROFILE="$(printf '%s' "$AWS_PROFILE")"
 export AWS_REGION="$(printf '%s' "$AWS_REGION")"
 export CLUSTER_NAME="$(printf '%s' "$CLUSTER_NAME")"
