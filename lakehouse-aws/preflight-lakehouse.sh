@@ -168,6 +168,14 @@ prompt SITE_DOMAIN "Public Domain" "lakehouse.k8.ingext.io"
 prompt CERT_ARN "ACM Certificate ARN (Required for HTTPS)" "arn:aws:acm:us-east-2:..."
 prompt NAMESPACE "Kubernetes Namespace" "ingext" "true"
 
+# Node preferences (AMD EPYC preference)
+echo ""
+echo "Instance Recommendations:"
+echo "  - m5a.large (AMD EPYC) - Recommended for general purpose"
+echo "  - t3.large (Intel)     - Cost-effective for testing"
+prompt NODE_TYPE "Primary Node Instance Type" "m5a.large"
+prompt NODE_COUNT "Initial Node Count" "3"
+
 # 3) Readiness Checklist
 echo ""
 echo "Permissions & Readiness Check:"
@@ -232,6 +240,8 @@ export S3_BUCKET="$(printf '%s' "$S3_BUCKET")"
 export SITE_DOMAIN="$(printf '%s' "$SITE_DOMAIN")"
 export CERT_ARN="$(printf '%s' "$CERT_ARN")"
 export NAMESPACE="$(printf '%s' "$NAMESPACE")"
+export NODE_TYPE="$(printf '%s' "$NODE_TYPE")"
+export NODE_COUNT="$(printf '%s' "$NODE_COUNT")"
 
 # Self-reported readiness (for support/debugging)
 export PREFLIGHT_HAS_BILLING="$(printf '%s' "$HAS_BILLING")"
