@@ -29,6 +29,17 @@ log() {
   echo "==> $*"
 }
 
+# refresh aws public ecr login (needed for Ingext charts)
+if command -v aws >/dev/null 2>&1; then
+  if aws sts get-caller-identity >/dev/null 2>&1; then
+    log "Refreshing AWS ECR Public login..."
+    aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws || true
+  else
+    log "AWS CLI not authenticated. Clearing stale tokens to allow anonymous pull..."
+    helm registry logout public.ecr.aws >/dev/null 2>&1 || true
+  fi
+fi
+
 need() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "ERROR: missing dependency: $1"
@@ -40,6 +51,14 @@ need() {
 for bin in aws eksctl kubectl helm; do
   need "$bin"
 done
+
+wait_ns_pods_ready() {
+  local ns="$1"
+  local timeout="${2:-900s}"
+  log "Waiting for pods in namespace '$ns' to be Ready (timeout $timeout)"
+  kubectl wait --for=condition=Ready pods --all -n "$ns" --timeout="$timeout" || true
+  kubectl get pods -n "$ns" -o wide || true
+}
 
 # -------- 2. Deployment Summary --------
 cat <<EOF
@@ -96,7 +115,6 @@ eksctl create podidentityassociation \
 eksctl create addon --cluster "$CLUSTER_NAME" --name aws-ebs-csi-driver --region "$AWS_REGION" 2>/dev/null || true
 
 # StorageClass
-aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws
 helm upgrade --install ingext-aws-gp3 oci://public.ecr.aws/ingext/ingext-aws-gp3 -n kube-system
 
 # Mountpoint for S3 CSI
@@ -172,8 +190,7 @@ helm upgrade --install ingext-stack oci://public.ecr.aws/ingext/ingext-stack -n 
 helm upgrade --install etcd-single oci://public.ecr.aws/ingext/etcd-single -n "$NAMESPACE"
 helm upgrade --install etcd-single-cronjob oci://public.ecr.aws/ingext/etcd-single-cronjob -n "$NAMESPACE"
 
-log "Waiting 60 seconds for database services..."
-sleep 60
+wait_ns_pods_ready "$NAMESPACE" "600s"
 
 # -------- 7. Phase 5: Application (Stream) --------
 log "Phase 5: Application - Installing Ingext Stream..."
@@ -182,6 +199,8 @@ helm upgrade --install ingext-community-config oci://public.ecr.aws/ingext/ingex
 
 helm upgrade --install ingext-community-init oci://public.ecr.aws/ingext/ingext-community-init -n "$NAMESPACE"
 helm upgrade --install ingext-community oci://public.ecr.aws/ingext/ingext-community -n "$NAMESPACE"
+
+wait_ns_pods_ready "$NAMESPACE" "900s"
 
 # -------- 8. Phase 6: Application (Datalake) --------
 log "Phase 6: Application - Installing Ingext Datalake..."

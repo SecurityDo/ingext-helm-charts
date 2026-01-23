@@ -35,17 +35,25 @@ get_az_status() {
   local status="$1"
   if [[ "$status" == "Succeeded" ]] || [[ "$status" == "Running" ]]; then
     echo -e "${GREEN}${status}${NC}"
-  elif [[ "$status" == "Updating" ]] || [[ "$status" == "Creating" ]]; then
+  elif [[ "$status" == "Updating" ]] || [[ "$status" == "Creating" ]] || [[ "$status" == "Starting" ]]; then
     echo -e "${YELLOW}${status}${NC}"
   else
     echo -e "${RED}${status}${NC}"
   fi
 }
 
+# AKS Power State
 AKS_PROV=$(az aks show --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" --query 'provisioningState' -o tsv 2>/dev/null || echo "NOT FOUND")
+AKS_POWER=$(az aks show --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" --query 'powerState.code' -o tsv 2>/dev/null || echo "")
+
+AKS_DISP="$AKS_PROV"
+if [[ -n "$AKS_POWER" && "$AKS_POWER" != "Running" ]]; then
+  AKS_DISP="$AKS_PROV ($AKS_POWER)"
+fi
+
 STORAGE_PROV=$(az storage account show --name "$STORAGE_ACCOUNT" --resource-group "$RESOURCE_GROUP" --query 'provisioningState' -o tsv 2>/dev/null || echo "NOT FOUND")
 
-printf "$FORMAT" "AKS Cluster ($CLUSTER_NAME)" "$(get_az_status "$AKS_PROV")"
+printf "$FORMAT" "AKS Cluster ($CLUSTER_NAME)" "$(get_az_status "$AKS_DISP")"
 printf "$FORMAT" "Storage Account ($STORAGE_ACCOUNT)" "$(get_az_status "$STORAGE_PROV")"
 
 # 2. Kubernetes Pods Status Helper
@@ -116,8 +124,9 @@ check_pod_status "lake-mgr" "Lake Manager"
 check_pod_status "search-service" "Lake Search"
 check_pod_status "lake-worker" "Lake Worker"
 
+# 4. Networking & SSL
 echo ""
-echo "[Networking]"
+echo "[Networking & SSL]"
 # Ingress Address
 AGW_IP=$(kubectl get ingress -n "$NAMESPACE" -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "PROVISIONING...")
 COLOR_IP="$NC"
@@ -127,6 +136,20 @@ fi
 printf "$FORMAT" "Azure App Gateway" "${COLOR_IP}${AGW_IP}${NC}"
 printf "$FORMAT" "DNS Domain" "$SITE_DOMAIN"
 
+# Certificate Status
+if kubectl get crd certificates.cert-manager.io >/dev/null 2>&1; then
+  CERT_READY=$(kubectl get certificate -n "$NAMESPACE" -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "Unknown")
+  if [[ "$CERT_READY" == "True" ]]; then
+    printf "$FORMAT" "SSL Certificate" "${GREEN}Ready${NC}"
+  elif [[ "$CERT_READY" == "False" ]]; then
+    printf "$FORMAT" "SSL Certificate" "${YELLOW}Pending / Failed${NC}"
+  else
+    printf "$FORMAT" "SSL Certificate" "${RED}Not Found${NC}"
+  fi
+fi
+
+echo "------------------------------------------------------------------------"
+echo "Pod Summary: $(kubectl get pods -n "$NAMESPACE" --no-headers 2>/dev/null | grep -c "Running" || echo "0") running / $(kubectl get pods -n "$NAMESPACE" --no-headers 2>/dev/null | wc -l | tr -d ' ') total"
 echo "========================================================================"
 echo ""
 echo "💡 TIP: If components are 'NOT DEPLOYED' or stuck, check logs:"

@@ -38,6 +38,14 @@ for bin in az kubectl helm; do
   need "$bin"
 done
 
+wait_ns_pods_ready() {
+  local ns="$1"
+  local timeout="${2:-900s}"
+  log "Waiting for pods in namespace '$ns' to be Ready (timeout $timeout)"
+  kubectl wait --for=condition=Ready pods --all -n "$ns" --timeout="$timeout" || true
+  kubectl get pods -n "$ns" -o wide || true
+}
+
 # -------- 2. Deployment Summary --------
 cat <<EOF
 
@@ -110,6 +118,26 @@ if ! az aks show --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" >/dev
         echo "$AKS_OUTPUT"
       fi
       exit 1
+    elif echo "$AKS_OUTPUT" | grep -qi "ErrCode_InsufficientVCPUQuota"; then
+      # Extract values: "... left regional vcpu quota 10, requested quota 12 ..."
+      QUOTA_LEFT=$(echo "$AKS_OUTPUT" | grep -oEi "left regional vcpu quota [0-9]+" | awk '{print $NF}' || echo "unknown")
+      QUOTA_REQ=$(echo "$AKS_OUTPUT" | grep -oEi "requested quota [0-9]+" | awk '{print $NF}' || echo "unknown")
+      
+      echo ""
+      echo "❌ ERROR: INSUFFICIENT AZURE QUOTA"
+      echo "------------------------------------------------"
+      echo "Location:  $LOCATION"
+      echo "Available: $QUOTA_LEFT vCPUs"
+      echo "Requested: $QUOTA_REQ vCPUs"
+      echo "------------------------------------------------"
+      echo "Your Azure subscription quota for '$LOCATION' is too low for this deployment."
+      echo ""
+      echo "💡 SOLUTIONS:"
+      echo "  1. Request a quota increase: https://learn.microsoft.com/en-us/azure/quotas/view-quotas"
+      echo "  2. Run preflight again and choose a 'Small' preset (2 nodes x 2 vCPU = 4 total)."
+      echo "  3. Use 'Custom' in preflight to set a lower node count (e.g., 2 nodes)."
+      echo ""
+      exit 1
     else
       echo "ERROR: AKS cluster creation failed."
       echo "$AKS_OUTPUT"
@@ -181,9 +209,24 @@ kubectl create secret generic app-secret \
     --from-literal=token="tok_$random_str" \
     --dry-run=client -o yaml | kubectl apply -f -
 
+# Ingext charts are hosted on AWS Public ECR. 
+# We try to refresh the login if AWS CLI is configured to avoid rate limits,
+# but we skip it if no credentials are found to allow pure Azure installs.
+if command -v aws >/dev/null 2>&1; then
+  if aws sts get-caller-identity >/dev/null 2>&1; then
+    log "Refreshing AWS ECR Public login (for Helm charts)..."
+    aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws || true
+  else
+    log "AWS CLI not authenticated. Clearing stale tokens to allow anonymous pull..."
+    helm registry logout public.ecr.aws >/dev/null 2>&1 || true
+  fi
+fi
+
 helm upgrade --install ingext-stack oci://public.ecr.aws/ingext/ingext-stack -n "$NAMESPACE"
 helm upgrade --install etcd-single oci://public.ecr.aws/ingext/etcd-single -n "$NAMESPACE"
 helm upgrade --install etcd-single-cronjob oci://public.ecr.aws/ingext/etcd-single-cronjob -n "$NAMESPACE"
+
+wait_ns_pods_ready "$NAMESPACE" "600s"
 
 # -------- 6. Phase 4: Application (Stream) --------
 log "Phase 5: Application - Installing Ingext Stream..."
@@ -203,6 +246,8 @@ helm upgrade --install ingext-community-config oci://public.ecr.aws/ingext/ingex
 
 helm upgrade --install ingext-community-init oci://public.ecr.aws/ingext/ingext-community-init -n "$NAMESPACE"
 helm upgrade --install ingext-community oci://public.ecr.aws/ingext/ingext-community -n "$NAMESPACE"
+
+wait_ns_pods_ready "$NAMESPACE" "900s"
 
 # -------- 7. Phase 5: Application (Datalake) --------
 log "Phase 6: Application - Installing Ingext Datalake..."

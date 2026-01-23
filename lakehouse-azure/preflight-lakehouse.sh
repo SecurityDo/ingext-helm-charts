@@ -115,44 +115,75 @@ prompt SITE_DOMAIN "Public Domain" "lakehouse.k8.ingext.io"
 prompt CERT_EMAIL "Email for TLS certificate (Let's Encrypt)" "chris@ingext.io"
 prompt NAMESPACE "Kubernetes Namespace" "ingext" "true"
 
-# VM Size selection
-echo ""
-echo "VM Size Selection for region '$LOCATION'..."
-
-# Truthful "available to your subscription" list
-# We check for both null restrictions and empty list restrictions
-ALLOWED=$(
-  az vm list-skus -l "$LOCATION" --resource-type virtualMachines \
-    --query "[?(restrictions==null || length(restrictions) == \`0\`) && to_number(capabilities[?name=='vCPUs'].value | [0]) >= \`2\`].name" -o tsv 2>/dev/null || true
-)
-
-if [[ -n "$ALLOWED" ]]; then
-  echo "Commonly available sizes in your subscription (filtered):"
-  # D / Das / Dads / Ddsv / etc, v3-v6
-  # tr to lowercase for consistent regex matching
-  echo "$ALLOWED" \
-    | tr '[:upper:]' '[:lower:]' \
-    | grep -Ei '^(standard_)?d[0-9]+(a|as|ads|ad|d|p|pd|pld)?s?_v[3-6]$' \
-    | head -n 15
-  
-  # Set a safe default if our previous default isn't in the list
-  DEFAULT_VM_SIZE="Standard_D2s_v5" # Usually more available than v6 in many regions
-  FOUND_IN_LIST=$(echo "$ALLOWED" | tr '[:upper:]' '[:lower:]' | grep -xiE "^(standard_)?${DEFAULT_VM_SIZE}$" || true)
-  if [[ -z "$FOUND_IN_LIST" ]]; then
-    # Pick the first allowed D-series
-    DEFAULT_VM_SIZE=$(echo "$ALLOWED" | tr '[:upper:]' '[:lower:]' | grep -Ei '^(standard_)?d[0-9]+' | head -n 1 || echo "$(echo "$ALLOWED" | head -n 1)")
-    # Convert back to ProperCase for display
-    DEFAULT_VM_SIZE=$(echo "$DEFAULT_VM_SIZE" | sed 's/^standard/Standard/' | sed 's/_v/_v/')
-  fi
-else
-  echo "⚠️  Could not query subscription-available SKUs. Falling back to catalog list."
-  DEFAULT_VM_SIZE="Standard_D2as_v5"
-  az vm list-sizes -l "$LOCATION" --query "[?numberOfCores >= \`2\`].name" -o tsv 2>/dev/null | head -n 15
-fi
+###############################################################################
+# Optimized VM size selection (one call to Azure, then local matching)
+###############################################################################
 
 echo ""
-prompt NODE_VM_SIZE "AKS Node VM Size" "$DEFAULT_VM_SIZE"
-prompt NODE_COUNT "Initial Node Count" "3"
+echo "VM Size Selection for region '$LOCATION' (verifying with subscription)..."
+echo "  (This takes about 30 seconds to query Azure's allowed SKUs...)"
+
+# Fetch all allowed VMs for this region in one go
+# We check for null restrictions AND empty list restrictions to be extra safe
+# Fetch all VMs for this region that have at least 2 vCPUs
+# We ignore the 'restrictions' field here because SKUs with zonal restrictions 
+# are often still available for AKS.
+ALLOWED_SKUS=$(az vm list-skus -l "$LOCATION" --resource-type virtualMachines \
+  --query "[?capabilities[?name=='vCPUs' && to_number(value) >= \`2\`]].name" -o tsv 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")
+
+# Helper to find the first candidate that exists in the allowed list
+find_allowed() {
+  local candidates=("$@")
+  for c in "${candidates[@]}"; do
+    local c_lower=$(echo "$c" | tr '[:upper:]' '[:lower:]')
+    if echo "$ALLOWED_SKUS" | grep -qx "$c_lower" 2>/dev/null; then
+      echo "$c"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Candidate lists (ordered by most likely to be allowed)
+# We prioritize s_v6 as it's the recommended modern default
+SMALL_CANDS=("Standard_D2s_v6" "Standard_D2s_v4" "Standard_D2s_v5" "Standard_D2_v4" "Standard_D2_v3" "Standard_D2as_v5")
+MEDIUM_CANDS=("Standard_D4s_v6" "Standard_D4s_v4" "Standard_D4s_v5" "Standard_D4_v4" "Standard_D4_v3" "Standard_D4as_v5")
+LARGE_CANDS=("Standard_D8s_v6" "Standard_D8s_v4" "Standard_D8s_v5" "Standard_D8_v4" "Standard_D8_v3" "Standard_D8as_v5")
+
+SMALL_SKU=$(find_allowed "${SMALL_CANDS[@]}" || echo "Standard_D2s_v6")
+MEDIUM_SKU=$(find_allowed "${MEDIUM_CANDS[@]}" || echo "Standard_D4s_v6")
+LARGE_SKU=$(find_allowed "${LARGE_CANDS[@]}" || echo "Standard_D8s_v6")
+
+echo "  ✅ Verification complete."
+echo ""
+echo "AKS Node Size Presets:"
+echo "  1) Small   - Testing / Dev        ($SMALL_SKU)  [2 vCPU, 8GB RAM]"
+echo "  2) Medium  - Pilot / Light Prod   ($MEDIUM_SKU)  [4 vCPU, 16GB RAM]  (3 nodes = 12 vCPU)"
+echo "  3) Large   - Production           ($LARGE_SKU)  [8 vCPU, 32GB RAM]  (3 nodes = 24 vCPU)"
+echo "  4) Custom  - Enter manually"
+echo ""
+
+read -rp "Select node size 1-4 [default 2]: " SIZE_CHOICE
+SIZE_CHOICE="${SIZE_CHOICE:-2}"
+
+case "$SIZE_CHOICE" in
+  1) NODE_VM_SIZE="$SMALL_SKU";  NODE_COUNT_DEFAULT="2" ;;
+  2) NODE_VM_SIZE="$MEDIUM_SKU"; NODE_COUNT_DEFAULT="3" ;;
+  3) NODE_VM_SIZE="$LARGE_SKU";  NODE_COUNT_DEFAULT="3" ;;
+  4)
+     read -rp "Enter AKS Node VM Size (e.g. Standard_D2s_v4): " NODE_VM_SIZE
+     NODE_COUNT_DEFAULT="3"
+     ;;
+  *)
+     echo "Invalid choice, defaulting to Medium."
+     NODE_VM_SIZE="$MEDIUM_SKU"
+     NODE_COUNT_DEFAULT="3"
+     ;;
+esac
+
+echo ""
+echo "Selected VM Size: $NODE_VM_SIZE"
+prompt NODE_COUNT "Initial Node Count" "$NODE_COUNT_DEFAULT"
 
 # 3) Readiness Checklist
 echo ""
@@ -194,6 +225,11 @@ export CERT_EMAIL="$CERT_EMAIL"
 export NAMESPACE="$NAMESPACE"
 export NODE_VM_SIZE="$NODE_VM_SIZE"
 export NODE_COUNT="$NODE_COUNT"
+
+# Self-reported readiness (for support/debugging)
+export PREFLIGHT_HAS_BILLING="$HAS_BILLING"
+export PREFLIGHT_HAS_OWNER="$HAS_OWNER"
+export PREFLIGHT_HAS_DNS="$HAS_DNS"
 EOF
 
 chmod +x "$OUTPUT_ENV"
