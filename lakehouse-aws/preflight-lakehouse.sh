@@ -173,8 +173,8 @@ echo ""
 echo "Instance Recommendations:"
 echo "  - m5a.large (AMD EPYC) - Recommended for general purpose"
 echo "  - t3.large (Intel)     - Cost-effective for testing"
-prompt NODE_TYPE "Primary Node Instance Type" "m5a.large"
-prompt NODE_COUNT "Initial Node Count" "3"
+prompt NODE_TYPE "Primary Node Instance Type" "t3.large"
+prompt NODE_COUNT "Initial Node Count" "2"
 
 # 3) Readiness Checklist
 echo ""
