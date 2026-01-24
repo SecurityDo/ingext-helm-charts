@@ -155,3 +155,48 @@ ingext application install \
   --instance SecurityDoAccount2 \
   --config adminUserEmail="$adminUserEmail" \
   --secret serviceAccountKey="@ingext-reader-key.json"
+```
+
+## Read K8s logs collected by Fluent bit in a S3 bucket
+
+### Step 1. enable event notification on the S3 bucket
+
+* Create a SQS queue on the same region as the bucket
+* Enable event notification on the S3 bucket, sent the notification event to the queue just created.
+* Create an IAM policy to read from the S3 bucket and the SQS queue
+
+```bash
+## <remoteProfile> <remoteRegion> <bucket> <prefix> <assumedRoleName>  
+scripts/aws/s3_bucket_notify_setup.sh <remoteProfile> <remoteRegion> <bucket> <prefix> <SQS queue name> > policy.json
+```
+
+### Step 2. Setup Roles on "local" and "remote" AWS accounts
+
+* Create a "assumed role" on the "remote AWS account" where S3 bucket is hosted
+* Attach the IAM policy created in Step 1 to this role
+* Allow the ingext service account role to assume this role
+* On the "local" AWS account where ingext app is hosted, allow the ingext service account role to assume the remote role just created on the remote AWS account.
+
+```bash
+## <remoteProfile> <remoteRegion> <bucket> <prefix> <assumedRoleName>  
+scripts/aws/external-role_setup.sh <localProfile> <remoteProfile> <assumedRoleName> <policy.json>
+```
+
+### Step 3. Register the remote assumed role in the ingext app.
+
+```bash
+ingext eks add-assumed-role --name "$remoteAccountID:$assumedRoleName" --roleArn arn:aws:iam::$remoteAccountID:role/$assumedRoleName
+```
+
+
+### Step 4. Configure one integration "S3 with notification" with the remote assumed role set for authorization method.
+
+### Step 5. Install AWSFluentbitS3 application template with datasource/router/datasink configured.
+
+```bash
+ingext application install --app AWSFluentbitS3 \
+  --instance $name \
+  --config Region="$region" \
+  --config SQS_URL="$SQS_URO" \
+  --secret AWS_Role="$remoteAccountID:$assumedRoleName"
+```

@@ -139,6 +139,8 @@ aws iam put-role-policy \
 REMOTE_ROLE_ARN="arn:aws:iam::${REMOTE_ACCOUNT_ID}:role/${TARGET_ROLE_NAME}"
 echo ">>> Verifying connectivity..."
 
+sleep 5
+
 # Capture the output of the test command
 TEST_RESULT=$(ingext eks test-assumed-role --roleArn "$REMOTE_ROLE_ARN")
 
@@ -155,7 +157,7 @@ fi
 
 # Only register if the role was newly created
 if [ "$ROLE_WAS_CREATED" = true ]; then
-    echo ">>> Registering new role with internal system..."
+    echo ">>> Registering new role with ingext cli..."
     
     # Execute registration and capture output
     REG_OUTPUT=$(ingext eks add-assumed-role --name "${REMOTE_ACCOUNT_ID}:${TARGET_ROLE_NAME}" --roleArn "$REMOTE_ROLE_ARN")

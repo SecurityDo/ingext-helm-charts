@@ -147,6 +147,8 @@ aws iam put-role-policy \
 TARGET_ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${TARGET_ROLE_NAME}"
 echo ">>> Verifying connectivity..."
 
+sleep 5
+
 # Verify assumption capability
 TEST_RESULT=$(ingext eks test-assumed-role --roleArn "$TARGET_ROLE_ARN")
 
@@ -154,4 +156,27 @@ if [ "$TEST_RESULT" == "OK" ]; then
     echo "    Verification Successful: OK"
 else
     echo "    Verification Failed!"
-    echo "    Output
+    echo "    Output: $TEST_RESULT"
+    echo "    Aborting registration."
+    # Cleanup before exit
+    rm -f "$TRUST_POLICY_FILE" "$ASSUME_POLICY_FILE" "$TEMP_POLICY_JSON"
+    exit 1
+fi
+
+# Only register if newly created
+if [ "$ROLE_WAS_CREATED" = true ]; then
+    echo ">>> Registering new internal role..."
+    
+    # Note: Using "local:" prefix as requested
+    REG_OUTPUT=$(ingext eks add-assumed-role --name "${ACCOUNT_ID}:${TARGET_ROLE_NAME}" --roleArn "$TARGET_ROLE_ARN")
+    
+    echo "    Registration Result: $REG_OUTPUT"
+else
+    echo ">>> Role was pre-existing. Skipping registration step."
+fi
+
+# --- Cleanup ---
+rm -f "$TRUST_POLICY_FILE" "$ASSUME_POLICY_FILE" "$TEMP_POLICY_JSON"
+
+echo "--- Setup Complete ---"
+echo "Target Role ARN: $TARGET_ROLE_ARN"
