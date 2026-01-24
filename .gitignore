@@ -2,3 +2,5 @@
 # Ignore local README changes as requested
 README.md
 .DS_Store
+node_modules/
+**/node_modules/
