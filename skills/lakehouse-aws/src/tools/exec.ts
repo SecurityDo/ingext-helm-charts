@@ -26,11 +26,14 @@ export function execCmd(
       // The script is at ./bin/run-in-docker.sh relative to skills/lakehouse-aws
       fullCmd = "./bin/run-in-docker.sh";
       fullArgs = [cmd, ...args];
+      // Merge process.env with opts.env to ensure AWS credentials are passed through
+      const mergedEnv = { ...process.env, ...(opts?.env ?? {}) };
       execOpts = {
-        env: { ...process.env, ...(opts?.env ?? {}) },
+        env: mergedEnv,
         cwd: opts?.cwd ?? process.cwd(),
         stdio: ["ignore", "pipe", "pipe"],
       };
+      console.error(`[DEBUG] Docker exec: ${fullCmd} ${fullArgs.join(" ")}`);
     } else {
       // Local execution
       fullCmd = cmd;
@@ -43,6 +46,7 @@ export function execCmd(
     }
 
     const child = spawn(fullCmd, fullArgs, execOpts);
+    console.error(`[DEBUG] Spawned PID: ${child.pid}`);
 
     let stdout = "";
     let stderr = "";

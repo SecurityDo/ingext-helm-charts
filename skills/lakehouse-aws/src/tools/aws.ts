@@ -27,5 +27,5 @@ export async function describeCluster(clusterName: string, awsProfile: string, a
     awsProfile,
     awsRegion
   );
-  return { found: res.ok, status: res.ok ? res.stdout : "NOT_FOUND", raw: res };
+  return { found: res.ok, status: res.ok ? res.stdout.trim() : "NOT_FOUND", raw: res };
 }

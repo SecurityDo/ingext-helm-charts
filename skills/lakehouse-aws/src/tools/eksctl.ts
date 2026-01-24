@@ -45,6 +45,34 @@ export async function createCluster(config: CreateClusterConfig) {
   return eksctl(args, { AWS_PROFILE: config.profile, AWS_DEFAULT_REGION: config.region });
 }
 
+export type CreateNodegroupConfig = {
+  clusterName: string;
+  nodegroupName: string;
+  nodeType: string;
+  nodeCount: number;
+  region: string;
+  profile: string;
+};
+
+export async function createNodegroup(config: CreateNodegroupConfig) {
+  const args = [
+    "create",
+    "nodegroup",
+    "--cluster",
+    config.clusterName,
+    "--region",
+    config.region,
+    "--name",
+    config.nodegroupName,
+    "--node-type",
+    config.nodeType,
+    "--nodes",
+    String(config.nodeCount),
+    "--managed",
+  ];
+  return eksctl(args, { AWS_PROFILE: config.profile, AWS_DEFAULT_REGION: config.region });
+}
+
 export async function createAddon(cluster: string, addon: string, region: string, profile: string) {
   const res = await eksctl(
     ["create", "addon", "--cluster", cluster, "--name", addon, "--region", region],

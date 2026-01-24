@@ -1,5 +1,7 @@
 import { PreflightResult } from "./skill.js";
 import { runPhase1Foundation, Phase1Evidence } from "./steps/install/phase1-foundation.js";
+import { runPhase2Storage, Phase2Evidence } from "./steps/install/phase2-storage.js";
+import { runPhase3Compute, Phase3Evidence } from "./steps/install/phase3-compute.js";
 
 export type InstallInput = {
   approve: boolean;
@@ -7,12 +9,18 @@ export type InstallInput = {
 };
 
 export type InstallResult = {
-  status: "needs_input" | "completed_phase" | "error";
-  phase?: "foundation";
+  status: "needs_input" | "completed_phase" | "blocked_phase" | "error";
+  phase?: "foundation" | "storage" | "compute" | "core" | "stream" | "datalake" | "ingress";
   required?: string[];
   plan?: string;
-  evidence?: Phase1Evidence;
+  evidence?: 
+    | Phase1Evidence 
+    | Phase2Evidence 
+    | Phase3Evidence
+    | { phase1: Phase1Evidence; phase2: Phase2Evidence }
+    | { phase1: Phase1Evidence; phase2: Phase2Evidence; phase3: Phase3Evidence };
   blockers?: Array<{ code: string; message: string }>;
+  next?: { action: "install" | "fix" | "stop"; phase?: string };
 };
 
 function renderInstallPlan(env: Record<string, string>): string {
@@ -33,6 +41,19 @@ Phase 1: Foundation (EKS)
   • EBS CSI Driver
   • S3 CSI Driver (Mountpoint)
   • GP3 StorageClass
+
+Phase 2: Storage (S3 & IAM)
+  • S3 Bucket: ${env.S3_BUCKET}
+  • Region: ${env.AWS_REGION}
+  • IAM Policy: S3 access for lakehouse
+  • Namespace: ${env.NAMESPACE || "ingext"}
+  • Pod Identity: Link ServiceAccount to IAM role
+
+Phase 3: Compute (Karpenter)
+  • Cluster: ${env.CLUSTER_NAME}
+  • Version: 1.8.3 (compatible with EKS 1.34+)
+  • Autoscaling: Karpenter controller + node pools
+  • IAM: Node role + Controller role with Pod Identity
 
 ═══════════════════════════════════════════════════════════════
 
@@ -70,9 +91,59 @@ export async function runInstall(input: InstallInput, preflightResult: Preflight
     };
   }
 
+  // Run Phase 2: Storage
+  const phase2Result = await runPhase2Storage(input.env);
+
+  if (!phase2Result.ok) {
+    return {
+      status: "error",
+      phase: "storage",
+      evidence: {
+        phase1: phase1Result.evidence,
+        phase2: phase2Result.evidence,
+      },
+      blockers: phase2Result.blockers,
+    };
+  }
+
+  // Run Phase 3: Compute
+  const phase3Result = await runPhase3Compute(input.env);
+
+  if (!phase3Result.ok) {
+    // Determine if this is a blocker (dependencies not met) or error (fatal)
+    const isDependencyIssue = phase3Result.blockers.some(
+      b => b.code === "NO_NODES_AVAILABLE" || 
+           b.code === "NO_READY_NODES" || 
+           b.code === "PHASE1_INCOMPLETE"
+    );
+
+    return {
+      status: isDependencyIssue ? "blocked_phase" : "error",
+      phase: "compute",
+      evidence: {
+        phase1: phase1Result.evidence,
+        phase2: phase2Result.evidence,
+        phase3: phase3Result.evidence,
+      },
+      blockers: phase3Result.blockers,
+      next: {
+        action: isDependencyIssue ? "fix" : "stop",
+        phase: isDependencyIssue ? "foundation" : undefined,
+      },
+    };
+  }
+
   return {
     status: "completed_phase",
-    phase: "foundation",
-    evidence: phase1Result.evidence,
+    phase: "compute",
+    evidence: {
+      phase1: phase1Result.evidence,
+      phase2: phase2Result.evidence,
+      phase3: phase3Result.evidence,
+    },
+    next: {
+      action: "install",
+      phase: "core_services",
+    },
   };
 }

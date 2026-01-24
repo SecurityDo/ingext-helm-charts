@@ -8,56 +8,111 @@ export type DomainConfirmation = {
   warnings: Array<{ code: string; message: string }>;
 };
 
+export type DiscoveryContext = {
+  route53Found: boolean;
+  route53ZoneId?: string;
+  route53ZoneName?: string;
+  certFound: boolean;
+  certArn?: string;
+  certDomain?: string;
+  certIsWildcard?: boolean;
+};
+
 /**
  * Confirms domain configuration with the user.
- * Provides clear information about root domain and site domain usage.
+ * Displays the root domain and site domain, and provides contextual feedback
+ * based on what was discovered in Route53 and ACM.
  */
-export function confirmDomains(input: PreflightInput, constructedSiteDomain: string): DomainConfirmation {
+export function confirmDomains(
+  input: PreflightInput,
+  siteDomain: string,
+  discovery?: DiscoveryContext
+): DomainConfirmation {
   const siteDomainWasConstructed = !input.siteDomain;
-  const siteDomain = input.siteDomain ?? constructedSiteDomain;
-  const warnings: Array<{ code: string; message: string }> = [];
-
-  // Build confirmation message
-  let message = `\n`;
-  message += `═══════════════════════════════════════════════════════════════\n`;
-  message += `Domain Configuration Confirmation\n`;
-  message += `═══════════════════════════════════════════════════════════════\n\n`;
-  message += `Root Domain:     ${input.rootDomain}\n`;
-  message += `                 ↑ This is YOUR domain (e.g., ingext.io, example.com)\n`;
-  message += `                 You must control DNS for this domain.\n\n`;
   
-  message += `Site Domain:     ${siteDomain}\n`;
-  if (siteDomainWasConstructed) {
-    message += `                 ↑ Constructed as: lakehouse.k8.${input.rootDomain}\n`;
-    message += `                 (k8 is a common subdomain pattern for Kubernetes)\n`;
+  const constructionNote = siteDomainWasConstructed
+    ? `                 ↑ Constructed as: ${siteDomain}
+                 (k8 is a common subdomain pattern for Kubernetes)`
+    : `                 ↑ Explicitly provided by user`;
+
+  // Build DNS status message
+  let dnsStatus: string;
+  if (discovery?.route53Found) {
+    dnsStatus = `
+✓ DNS Ready:     Route53 hosted zone found: ${discovery.route53ZoneName}
+                 Zone ID: ${discovery.route53ZoneId}
+                 DNS records can be automatically created during installation.`;
   } else {
-    message += `                 ↑ You provided this custom domain\n`;
+    dnsStatus = `
+⚠️  DNS Warning:  No Route53 hosted zone found for: ${input.rootDomain}
+                 You must manually configure DNS records.
+                 Create an A/CNAME record pointing ${siteDomain} to your load balancer.`;
   }
-  message += `                 This is where your Lakehouse will be accessible.\n\n`;
 
-  message += `Certificate:     Must be valid for: ${siteDomain}\n`;
-  message += `                 The ACM certificate ARN you provide must cover this domain.\n\n`;
+  // Build certificate status message
+  let certStatus: string;
+  if (discovery?.certFound) {
+    const certType = discovery.certIsWildcard ? "Wildcard" : "Exact match";
+    certStatus = `
+✓ Certificate:   ${certType} certificate found: ${discovery.certDomain}
+                 ARN: ${discovery.certArn}
+                 Valid for: ${siteDomain}`;
+  } else {
+    certStatus = `
+⚠️  Certificate:  No ACM certificate found covering: ${siteDomain}
+                 You must create an ACM certificate in ${input.awsRegion}.
+                 Request at: https://console.aws.amazon.com/acm/`;
+  }
 
-  // Add warnings if domain doesn't match expected pattern
-  if (!siteDomain.includes(input.rootDomain)) {
+  // Build action items
+  let actionItems: string;
+  if (discovery?.route53Found && discovery?.certFound) {
+    actionItems = `
+✓ Ready:         All prerequisites met. You can proceed with installation.`;
+  } else {
+    const items: string[] = [];
+    if (!discovery?.route53Found) {
+      items.push("   1. Set up Route53 hosted zone OR prepare manual DNS configuration");
+    }
+    if (!discovery?.certFound) {
+      items.push(`   ${items.length + 1}. Create ACM certificate for ${siteDomain} in ${input.awsRegion}`);
+    }
+    actionItems = `
+⚠️  Action Required:
+${items.join('\n')}`;
+  }
+
+  const message = `
+═══════════════════════════════════════════════════════════════
+Domain Configuration
+═══════════════════════════════════════════════════════════════
+
+Root Domain:     ${input.rootDomain}
+                 ↑ This is YOUR domain (e.g., ingext.io, example.com)
+
+Site Domain:     ${siteDomain}
+${constructionNote}
+                 This is where your Lakehouse will be accessible.
+${dnsStatus}
+${certStatus}
+${actionItems}
+
+═══════════════════════════════════════════════════════════════
+`;
+
+  const warnings: Array<{ code: string; message: string }> = [];
+  if (discovery && !discovery.route53Found) {
     warnings.push({
-      code: "DOMAIN_MISMATCH",
-      message: `Site domain "${siteDomain}" does not contain root domain "${input.rootDomain}". Make sure this is intentional.`,
+      code: "NO_ROUTE53_ZONE",
+      message: `No Route53 hosted zone found for ${input.rootDomain}. Manual DNS configuration required.`,
     });
   }
-
-  if (siteDomainWasConstructed && !siteDomain.startsWith("lakehouse.k8.")) {
+  if (discovery && !discovery.certFound) {
     warnings.push({
-      code: "UNEXPECTED_PATTERN",
-      message: `Site domain pattern is unexpected. Expected: lakehouse.k8.{rootDomain}`,
+      code: "NO_ACM_CERTIFICATE",
+      message: `No ACM certificate found covering ${siteDomain}. Certificate creation required.`,
     });
   }
-
-  message += `⚠️  IMPORTANT: Ensure you:\n`;
-  message += `   1. Control DNS for: ${input.rootDomain}\n`;
-  message += `   2. Have an ACM certificate for: ${siteDomain}\n`;
-  message += `   3. Can create DNS records pointing to your AWS Load Balancer\n\n`;
-  message += `═══════════════════════════════════════════════════════════════\n`;
 
   return {
     rootDomain: input.rootDomain,

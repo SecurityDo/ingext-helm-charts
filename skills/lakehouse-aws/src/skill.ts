@@ -97,39 +97,16 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
   const siteDomain = input.siteDomain ?? `lakehouse.k8.${input.rootDomain}`;
   const inputWithDomain = { ...input, siteDomain };
 
-  // Confirm domain configuration with user
-  const domainConfirmation = confirmDomains(input, siteDomain);
-  
-  // Add domain confirmation to evidence
-  evidence.domainConfirmation = {
-    rootDomain: domainConfirmation.rootDomain,
-    siteDomain: domainConfirmation.siteDomain,
-    siteDomainWasConstructed: domainConfirmation.siteDomainWasConstructed,
-  };
-
-  // Print domain confirmation message to console
-  console.error(domainConfirmation.message);
-
-  // Add warnings as blockers if domain issues detected
-  if (domainConfirmation.warnings.length > 0) {
-    blockers.push(...domainConfirmation.warnings);
-  }
-
-  // Check Route53 for domain ownership
+  // Check Route53 for domain ownership FIRST (before showing confirmation)
   const route53Check = await findHostedZoneForDomain(input.rootDomain);
   if (route53Check.ok && route53Check.zoneId) {
     evidence.route53ZoneId = route53Check.zoneId;
     evidence.route53ZoneName = route53Check.zoneName;
-    console.error(`\n✓ Route53 hosted zone found: ${route53Check.zoneName} (${route53Check.zoneId})`);
-  } else if (route53Check.ok) {
-    console.error(`\n⚠️  No Route53 hosted zone found for ${input.rootDomain}`);
-    console.error(`   You'll need to manually configure DNS records.`);
   }
 
-  // Discover or validate ACM certificate
+  // Discover or validate ACM certificate BEFORE confirmation
   let certArn = input.certArn;
   if (!certArn) {
-    console.error(`\n⏳ Searching for ACM certificate covering: ${siteDomain}...`);
     const certSearch = await findCertificatesForDomain(siteDomain, input.awsRegion);
     
     if (certSearch.ok && certSearch.matches && certSearch.matches.length > 0) {
@@ -142,15 +119,6 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
       evidence.certDomain = selectedCert.domain;
       evidence.certIsWildcard = selectedCert.wildcard;
       evidence.certAutoDiscovered = true;
-      
-      console.error(`✓ Found certificate: ${selectedCert.domain}`);
-      console.error(`  ARN: ${certArn}`);
-      if (selectedCert.wildcard) {
-        console.error(`  Type: Wildcard certificate`);
-      }
-      if (certSearch.matches.length > 1) {
-        console.error(`  (${certSearch.matches.length} matching certificates found, selected first match)`);
-      }
     } else if (certSearch.ok) {
       blockers.push({
         code: "NO_CERTIFICATE",
@@ -172,7 +140,32 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
     // User provided cert ARN explicitly
     evidence.certArn = certArn;
     evidence.certAutoDiscovered = false;
-    console.error(`\n✓ Using provided certificate: ${certArn}`);
+  }
+
+  // NOW show domain confirmation with discovery results
+  const domainConfirmation = confirmDomains(input, siteDomain, {
+    route53Found: !!evidence.route53ZoneId,
+    route53ZoneId: evidence.route53ZoneId,
+    route53ZoneName: evidence.route53ZoneName,
+    certFound: !!certArn,
+    certArn: certArn,
+    certDomain: evidence.certDomain,
+    certIsWildcard: evidence.certIsWildcard,
+  });
+  
+  // Add domain confirmation to evidence
+  evidence.domainConfirmation = {
+    rootDomain: domainConfirmation.rootDomain,
+    siteDomain: domainConfirmation.siteDomain,
+    siteDomainWasConstructed: domainConfirmation.siteDomainWasConstructed,
+  };
+
+  // Print domain confirmation message to console
+  console.error(domainConfirmation.message);
+
+  // Add warnings as blockers if domain issues detected
+  if (domainConfirmation.warnings.length > 0) {
+    blockers.push(...domainConfirmation.warnings);
   }
 
   // Validate all required variables are set and valid
@@ -201,17 +194,22 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
   const s3Bucket = (input.s3Bucket ?? `ingext-lakehouse-${authResult.accountId}`).toLowerCase().replace(/[^a-z0-9]/g, "");
 
   // Checks
+  console.error(`\n⏳ Checking S3 bucket: ${s3Bucket}...`);
   const b = await headBucket(s3Bucket, input.awsProfile, input.awsRegion);
   evidence.s3BucketExists = b.exists;
+  console.error(`✓ S3 bucket ${b.exists ? "exists" : "not found"}`);
 
+  console.error(`⏳ Checking EKS cluster: ${input.clusterName}...`);
   const c = await describeCluster(input.clusterName, input.awsProfile, input.awsRegion);
   evidence.eksClusterStatus = c.status;
+  console.error(`✓ EKS cluster status: ${c.status}`);
 
   if (input.dnsCheck) {
     const d = await digA(siteDomain);
     if (d.ok) evidence.dnsARecord = d.ip;
   }
 
+  console.error(`⏳ Building environment configuration...`);
   const env: Record<string, string> = {
     AWS_PROFILE: input.awsProfile,
     AWS_REGION: input.awsRegion,
@@ -252,11 +250,15 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
     const w = await writeEnvFile(input.outputEnvPath, lines, input.overwriteEnv);
     if (!w.ok) {
       blockers.push({ code: "ENV_WRITE_BLOCKED", message: w.error });
+    } else {
+      console.error(`✓ Environment file written to: ${input.outputEnvPath}`);
     }
   }
 
   // Recompute okToInstall after potential blocker from env file write
   okToInstall = blockers.length === 0;
+
+  console.error(`\n⏳ Preflight complete. okToInstall=${okToInstall}`);
 
   return {
     okToInstall,
