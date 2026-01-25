@@ -188,7 +188,6 @@ scripts/aws/external-role_setup.sh <localProfile> <remoteProfile> <assumedRoleNa
 ingext eks add-assumed-role --name "$remoteAccountID:$assumedRoleName" --roleArn arn:aws:iam::$remoteAccountID:role/$assumedRoleName
 ```
 
-
 ### Step 4. Configure one integration "S3 with notification" with the remote assumed role set for authorization method.
 
 ### Step 5. Install AWSFluentbitS3 application template with datasource/router/datasink configured.
@@ -199,4 +198,60 @@ ingext application install --app AWSFluentbitS3 \
   --config Region="$region" \
   --config SQS_URL="$SQS_URO" \
   --secret AWS_Role="$remoteAccountID:$assumedRoleName"
+```
+
+## Import from AWS CloudWatch LogGroup:  [AWS Cloudwatch LogGroup event export](https://github.com/SecurityDo/fpl-reports/blob/main/docs/cloudwatchImport.adoc)
+
+### Step 1: Setup IAM Roles for Cloudwatch and Firehose service.
+
+* Create a S3 bucket to hold the loggroup data. (shared by all loggroups)
+* Create a new IAM role, allow Firehose to write to the S3 bucket just created.
+* Create a new IAM role, allow Cloudwatch to write to the Firehose stream.
+* https://fluency-cloudformation.s3.us-east-2.amazonaws.com/FluencyCloudWatchFirehose.yaml[Cloudformation Template]
+* Cloudformation Parameters:
+** CloudWatchRole:  fluencyCloudwatchToFireHose
+** FirehoseRole: fluencyFireHoseToS3
+** S3Bucket: {yourcompany}-fluency-cloudwatch-firehose
+
+### Step 2: Add Loggroup one by one
+
+* Create a new Firehose stream.
+* Create a new subscription filter for the loggroup, set the destination to the Firehose stream.
+* https://fluency-cloudformation.s3.us-east-2.amazonaws.com/FluencyCloudWatchSubscriptionFilter.yaml[Cloudformation Template]
+* Cloudformation Parameters:
+** CloudWatchRole:  fluencyCloudwatchToFireHose
+** FilterName: passthrough
+** FilterPattern: ""
+** FirehoseRole: fluencyFireHoseToS3
+** LogGroup:
+** S3Bucket: {yourcompany}-fluency-cloudwatch-firehose
+
+### Step 3: enable event notification on the S3 bucket and setup assumed role
+
+### Step 4: Install AWSCloudWatch application template
+
+For this example, we use the application template AWSCloudWatchLogGroupS3, which is configured with a event parser for AWS VPC network flow logs.
+
+```bash
+ingext application install --app AWSCloudWatchLogGroupS3 \
+  --instance $name \
+  --config Region="$AWS_REGION" \
+  --config SQS_URL="$SQS_URL" \
+  --config AWS_Role="$INGEXT_ROLE"
+```
+
+## Import AWS CloudTrail events
+
+### create a trail with a S3 bucket. Make sure "Log file SSE-KMS encryption" is disabled.
+
+### enable event notification on the S3 bucket
+
+### Install AWSCloudTrail application template
+
+```bash
+ingext application install --app AWSCloudTrail \
+  --instance $name \
+  --config Region="$AWS_REGION" \
+  --config SQS_URL="$SQS_URL" \
+  --config AWS_Role="$INGEXT_ROLE"
 ```
