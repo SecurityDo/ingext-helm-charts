@@ -83,3 +83,135 @@ export async function getAccountId(profile: string, region: string): Promise<str
 
   return null;
 }
+
+export async function deleteRole(roleName: string, profile: string) {
+  // First, detach all attached policies
+  const listResult = await run(
+    "aws",
+    [
+      "iam",
+      "list-attached-role-policies",
+      "--role-name",
+      roleName,
+      "--query",
+      "AttachedPolicies[*].PolicyArn",
+      "--output",
+      "text",
+    ],
+    { AWS_PROFILE: profile }
+  );
+
+  if (listResult.ok && listResult.stdout.trim()) {
+    const policies = listResult.stdout.trim().split(/\s+/).filter(Boolean);
+    for (const policyArn of policies) {
+      await run(
+        "aws",
+        ["iam", "detach-role-policy", "--role-name", roleName, "--policy-arn", policyArn],
+        { AWS_PROFILE: profile }
+      );
+    }
+  }
+
+  // Delete inline policies
+  const inlineResult = await run(
+    "aws",
+    [
+      "iam",
+      "list-role-policies",
+      "--role-name",
+      roleName,
+      "--query",
+      "PolicyNames[]",
+      "--output",
+      "text",
+    ],
+    { AWS_PROFILE: profile }
+  );
+
+  if (inlineResult.ok && inlineResult.stdout.trim()) {
+    const policies = inlineResult.stdout.trim().split(/\s+/).filter(Boolean);
+    for (const policyName of policies) {
+      await run(
+        "aws",
+        ["iam", "delete-role-policy", "--role-name", roleName, "--policy-name", policyName],
+        { AWS_PROFILE: profile }
+      );
+    }
+  }
+
+  // Finally, delete the role
+  const deleteResult = await run(
+    "aws",
+    ["iam", "delete-role", "--role-name", roleName],
+    { AWS_PROFILE: profile }
+  );
+
+  return deleteResult;
+}
+
+export async function deletePolicy(policyName: string, accountId: string, profile: string) {
+  const policyArn = `arn:aws:iam::${accountId}:policy/${policyName}`;
+
+  // Delete all non-default policy versions first
+  const versionsResult = await run(
+    "aws",
+    [
+      "iam",
+      "list-policy-versions",
+      "--policy-arn",
+      policyArn,
+      "--query",
+      "Versions[?IsDefaultVersion==`false`].VersionId",
+      "--output",
+      "text",
+    ],
+    { AWS_PROFILE: profile }
+  );
+
+  if (versionsResult.ok && versionsResult.stdout.trim()) {
+    const versions = versionsResult.stdout.trim().split(/\s+/).filter(Boolean);
+    for (const versionId of versions) {
+      await run(
+        "aws",
+        ["iam", "delete-policy-version", "--policy-arn", policyArn, "--version-id", versionId],
+        { AWS_PROFILE: profile }
+      );
+    }
+  }
+
+  // Delete the policy
+  const deleteResult = await run(
+    "aws",
+    ["iam", "delete-policy", "--policy-arn", policyArn],
+    { AWS_PROFILE: profile }
+  );
+
+  return deleteResult;
+}
+
+export async function getRole(roleName: string, profile: string) {
+  const result = await run(
+    "aws",
+    ["iam", "get-role", "--role-name", roleName],
+    { AWS_PROFILE: profile }
+  );
+  return result;
+}
+
+export async function createRole(roleName: string, trustPolicyJson: string, profile: string) {
+  const result = await run(
+    "aws",
+    ["iam", "create-role", "--role-name", roleName, "--assume-role-policy-document", trustPolicyJson],
+    { AWS_PROFILE: profile }
+  );
+  return result;
+}
+
+export async function attachPolicy(roleName: string, policyArn: string, profile: string) {
+  const result = await run(
+    "aws",
+    ["iam", "attach-role-policy", "--role-name", roleName, "--policy-arn", policyArn],
+    { AWS_PROFILE: profile }
+  );
+  return result;
+}

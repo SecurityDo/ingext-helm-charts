@@ -42,6 +42,8 @@ export async function createCluster(config: CreateClusterConfig) {
     String(config.nodeCount),
     "--managed",
   ];
+  // Note: eksctl create cluster outputs progress to stderr, which we capture
+  // The command itself takes ~15 minutes, but eksctl shows progress
   return eksctl(args, { AWS_PROFILE: config.profile, AWS_DEFAULT_REGION: config.region });
 }
 
@@ -112,4 +114,11 @@ export async function createPodIdentityAssociation(config: PodIdentityConfig) {
   const res = await eksctl(args, { AWS_PROFILE: config.profile, AWS_DEFAULT_REGION: config.region });
   // Ignore errors if already exists (idempotency)
   return { ok: res.ok || res.stderr.includes("already exists"), raw: res };
+}
+
+export async function deleteCluster(name: string, region: string, profile: string) {
+  return eksctl(
+    ["delete", "cluster", "--name", name, "--region", region, "--wait"],
+    { AWS_PROFILE: profile, AWS_DEFAULT_REGION: region }
+  );
 }

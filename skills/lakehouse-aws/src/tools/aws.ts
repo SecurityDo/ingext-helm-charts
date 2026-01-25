@@ -29,3 +29,108 @@ export async function describeCluster(clusterName: string, awsProfile: string, a
   );
   return { found: res.ok, status: res.ok ? res.stdout.trim() : "NOT_FOUND", raw: res };
 }
+
+/**
+ * Wait for EKS cluster to reach ACTIVE status
+ * Polls every 30 seconds with a maximum timeout
+ */
+export async function waitForClusterActive(
+  clusterName: string,
+  awsProfile: string,
+  awsRegion: string,
+  options?: { maxWaitMinutes?: number; verbose?: boolean }
+): Promise<{ ok: boolean; status: string; waitedSeconds: number; error?: string }> {
+  const maxWaitMinutes = options?.maxWaitMinutes || 20; // Default 20 minutes
+  const maxWaitSeconds = maxWaitMinutes * 60;
+  const pollIntervalSeconds = 30;
+  const verbose = options?.verbose !== false;
+  
+  const startTime = Date.now();
+  let lastStatus = "";
+  let pollCount = 0;
+  
+  if (verbose) {
+    console.error(`⏳ Waiting for cluster '${clusterName}' to become ACTIVE (max ${maxWaitMinutes} minutes)...`);
+    console.error(`   Polling every ${pollIntervalSeconds} seconds...`);
+  }
+  
+  while (true) {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    pollCount++;
+    
+    if (elapsed > maxWaitSeconds) {
+      if (verbose) {
+        console.error(`❌ Timeout after ${maxWaitMinutes} minutes. Final status: ${lastStatus}`);
+      }
+      return {
+        ok: false,
+        status: lastStatus,
+        waitedSeconds: elapsed,
+        error: `Timeout after ${maxWaitMinutes} minutes. Cluster status: ${lastStatus}`,
+      };
+    }
+    
+    // Show progress every poll
+    if (verbose) {
+      const minutes = Math.floor(elapsed / 60);
+      const seconds = elapsed % 60;
+      console.error(`   [Poll #${pollCount}] [${minutes}m ${seconds}s] Checking cluster status...`);
+    }
+    
+    const statusCheck = await describeCluster(clusterName, awsProfile, awsRegion);
+    
+    if (!statusCheck.found) {
+      if (verbose) console.error(`❌ Cluster not found`);
+      return {
+        ok: false,
+        status: "NOT_FOUND",
+        waitedSeconds: elapsed,
+        error: "Cluster not found",
+      };
+    }
+    
+    const status = statusCheck.status;
+    const statusChanged = status !== lastStatus;
+    lastStatus = status;
+    
+    if (verbose) {
+      if (statusChanged || pollCount === 1) {
+        const minutes = Math.floor(elapsed / 60);
+        const seconds = elapsed % 60;
+        process.stderr.write(`   Status: ${status} [${minutes}m ${seconds}s elapsed]\n`);
+        process.stderr.flush?.();
+      }
+    }
+    
+    if (status === "ACTIVE") {
+      const waitedSeconds = Math.floor((Date.now() - startTime) / 1000);
+      if (verbose) {
+        const minutes = Math.floor(waitedSeconds / 60);
+        const seconds = waitedSeconds % 60;
+        console.error(`✓ Cluster is ACTIVE! (waited ${minutes}m ${seconds}s, ${pollCount} polls)`);
+      }
+      return { ok: true, status, waitedSeconds };
+    }
+    
+    if (status === "FAILED" || status === "DELETING") {
+      if (verbose) console.error(`❌ Cluster is in ${status} state - cannot proceed`);
+      return {
+        ok: false,
+        status,
+        waitedSeconds: elapsed,
+        error: `Cluster is in ${status} state`,
+      };
+    }
+    
+    // Wait before next poll - show countdown every 5 seconds
+    if (verbose && status !== "ACTIVE") {
+      for (let remaining = pollIntervalSeconds; remaining > 0; remaining -= 5) {
+        process.stderr.write(`   Next check in ${remaining}s...\r`);
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
+      process.stderr.write(`   Next check in 0s...\n`);
+    } else {
+      await new Promise(resolve => setTimeout(resolve, pollIntervalSeconds * 1000));
+    }
+  }
+}

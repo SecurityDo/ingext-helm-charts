@@ -3,8 +3,9 @@ import { headBucket } from "./tools/aws.js";
 import { getCluster } from "./tools/eksctl.js";
 import { kubectl } from "./tools/kubectl.js";
 import { helm } from "./tools/helm.js";
-import { findCertificatesForDomain } from "./tools/acm.js";
+import { findCertificatesForDomain, describeCertificate } from "./tools/acm.js";
 import { findHostedZoneForDomain } from "./tools/route53.js";
+import { getExecMode } from "./tools/shell.js";
 
 export type StatusInput = {
   awsProfile: string;
@@ -14,9 +15,17 @@ export type StatusInput = {
   namespace?: string;
   rootDomain?: string;
   siteDomain?: string;
+  certArn?: string;
 };
 
 export type ComponentStatus = "ready" | "deployed" | "degraded" | "missing" | "unknown";
+
+export type ComponentPodStatus = {
+  name: string;
+  displayName: string;
+  status: "Running" | "Pending" | "CrashLoopBackOff" | "NOT DEPLOYED" | "Starting";
+  ready?: boolean;
+};
 
 export type StatusResult = {
   timestamp: string;
@@ -46,7 +55,25 @@ export type StatusResult = {
       arn?: string;
       domain?: string;
       validFor?: string[];
+      acmStatus?: string;
     };
+  };
+  components: {
+    coreServices: ComponentPodStatus[];
+    stream: ComponentPodStatus[];
+    datalake: ComponentPodStatus[];
+  };
+  networking: {
+    loadBalancer?: {
+      hostname?: string;
+      ip?: string;
+      status: ComponentStatus;
+    };
+    siteDomain?: string;
+  };
+  podSummary: {
+    running: number;
+    total: number;
   };
   kubernetes: {
     addons: {
@@ -102,6 +129,7 @@ export type StatusResult = {
       status: string;
       revision: number;
     }>;
+    error?: string;
   };
   readiness: {
     phase1Foundation: boolean;
@@ -114,6 +142,83 @@ export type StatusResult = {
   };
   nextSteps: string[];
 };
+
+// Helper function to check pod status by label (similar to bash script)
+async function checkPodStatusByLabel(
+  appName: string,
+  displayName: string,
+  namespace: string,
+  profile: string,
+  region: string
+): Promise<ComponentPodStatus> {
+  const labels = [
+    `ingext.io/app=${appName}`,
+    `app=${appName}`,
+    `app.kubernetes.io/name=${appName}`,
+  ];
+
+  for (const label of labels) {
+    const podCheck = await kubectl(
+      ["get", "pods", "-n", namespace, "-l", label, "-o", "json"],
+      { AWS_PROFILE: profile, AWS_REGION: region }
+    );
+
+    if (podCheck.ok) {
+      try {
+        const data = JSON.parse(podCheck.stdout);
+        const pods = data.items || [];
+        if (pods.length > 0) {
+          const pod = pods[0];
+          const phase = pod.status?.phase || "Unknown";
+          const containerStatuses = pod.status?.containerStatuses || [];
+          const ready = containerStatuses.length > 0 && containerStatuses.every((c: any) => c.ready);
+
+          if (phase === "Running") {
+            if (!ready) {
+              // Match bash script: "Starting (0/1)" when Running but not ready
+              return {
+                name: appName,
+                displayName,
+                status: "Starting",
+                ready: false,
+              };
+            }
+            return {
+              name: appName,
+              displayName,
+              status: "Running",
+              ready: true,
+            };
+          } else if (phase === "Pending") {
+            return {
+              name: appName,
+              displayName,
+              status: "Pending",
+              ready: false,
+            };
+          } else if (phase === "CrashLoopBackOff") {
+            return {
+              name: appName,
+              displayName,
+              status: "CrashLoopBackOff",
+              ready: false,
+            };
+          }
+        }
+      } catch (e) {
+        // Ignore parse errors
+      }
+    }
+  }
+
+  // No pods found - return NOT DEPLOYED (matches bash script)
+  return {
+    name: appName,
+    displayName,
+    status: "NOT DEPLOYED",
+    ready: false,
+  };
+}
 
 export async function runStatus(input: StatusInput): Promise<StatusResult> {
   const timestamp = new Date().toISOString();
@@ -130,6 +235,16 @@ export async function runStatus(input: StatusInput): Promise<StatusResult> {
       s3: { status: "unknown" },
       route53: { status: "unknown" },
       certificate: { status: "unknown" },
+    },
+    components: {
+      coreServices: [],
+      stream: [],
+      datalake: [],
+    },
+    networking: {},
+    podSummary: {
+      running: 0,
+      total: 0,
     },
     kubernetes: {
       addons: { status: "unknown", items: [] },
@@ -216,7 +331,20 @@ export async function runStatus(input: StatusInput): Promise<StatusResult> {
   }
 
   // 4. Check ACM Certificate
-  if (input.siteDomain && input.awsRegion) {
+  // If certArn is provided, use it directly (matches bash script behavior)
+  if (input.certArn && input.awsRegion) {
+    const certDetails = await describeCertificate(input.certArn, input.awsRegion);
+    if (certDetails.ok && certDetails.data?.Certificate) {
+      result.infrastructure.certificate.status = "deployed";
+      result.infrastructure.certificate.arn = input.certArn;
+      result.infrastructure.certificate.domain = certDetails.data.Certificate.DomainName;
+      result.infrastructure.certificate.acmStatus = certDetails.data.Certificate.Status;
+      result.infrastructure.certificate.validFor = certDetails.data.Certificate.SubjectAlternativeNames || [];
+    } else {
+      result.infrastructure.certificate.status = "missing";
+    }
+  } else if (input.siteDomain && input.awsRegion) {
+    // Fallback to searching by domain
     const certCheck = await findCertificatesForDomain(input.siteDomain, input.awsRegion);
     if (certCheck.ok && certCheck.matches && certCheck.matches.length > 0) {
       const cert = certCheck.matches[0];
@@ -224,13 +352,109 @@ export async function runStatus(input: StatusInput): Promise<StatusResult> {
       result.infrastructure.certificate.arn = cert.arn;
       result.infrastructure.certificate.domain = cert.domain;
       result.infrastructure.certificate.validFor = certCheck.matches.map(c => c.domain);
+      result.infrastructure.certificate.acmStatus = cert.status;
+      
+      // Get detailed certificate status
+      if (cert.arn) {
+        const certDetails = await describeCertificate(cert.arn, input.awsRegion);
+        if (certDetails.ok && certDetails.data?.Certificate) {
+          result.infrastructure.certificate.acmStatus = certDetails.data.Certificate.Status;
+        }
+      }
     } else {
       result.infrastructure.certificate.status = "missing";
       nextSteps.push(`Request ACM certificate for: ${input.siteDomain}`);
     }
   }
+  
+  // Store site domain for networking section
+  if (input.siteDomain) {
+    result.networking.siteDomain = input.siteDomain;
+  }
 
-  // Only check Kubernetes resources if cluster is active
+  // Always try to check component pods (matches bash script behavior - always checks pods)
+  const ns = input.namespace || "ingext";
+  
+  // Check Component Pods (Core Services, Stream, Datalake) - ALWAYS run, regardless of cluster status
+  result.components.coreServices = [
+    await checkPodStatusByLabel("redis", "Redis (Cache)", ns, input.awsProfile, input.awsRegion),
+    await checkPodStatusByLabel("opensearch", "OpenSearch (Search Index)", ns, input.awsProfile, input.awsRegion),
+    await checkPodStatusByLabel("victoria-metrics-single", "VictoriaMetrics (TSDB)", ns, input.awsProfile, input.awsRegion),
+    await checkPodStatusByLabel("etcd", "etcd (Key-Value Store)", ns, input.awsProfile, input.awsRegion),
+  ];
+
+  result.components.stream = [
+    await checkPodStatusByLabel("api", "API Service", ns, input.awsProfile, input.awsRegion),
+    await checkPodStatusByLabel("platform", "Platform Service", ns, input.awsProfile, input.awsRegion),
+    await checkPodStatusByLabel("fluency8", "Fluency Service", ns, input.awsProfile, input.awsRegion),
+  ];
+
+  result.components.datalake = [
+    await checkPodStatusByLabel("lake-mgr", "Lake Manager", ns, input.awsProfile, input.awsRegion),
+    await checkPodStatusByLabel("search-service", "Lake Search", ns, input.awsProfile, input.awsRegion),
+    await checkPodStatusByLabel("lake-worker", "Lake Worker", ns, input.awsProfile, input.awsRegion),
+  ];
+
+  // Check Ingress / Load Balancer (always try)
+  const ingressCheck = await kubectl(
+    ["get", "ingress", "-n", ns, "-o", "json"],
+    { AWS_PROFILE: input.awsProfile, AWS_REGION: input.awsRegion }
+  );
+
+  if (ingressCheck.ok) {
+    try {
+      const ingressData = JSON.parse(ingressCheck.stdout);
+      const ingresses = ingressData.items || [];
+      if (ingresses.length > 0) {
+        const ingress = ingresses[0];
+        const lbIngress = ingress.status?.loadBalancer?.ingress?.[0];
+        const hostname = lbIngress?.hostname;
+        const ip = lbIngress?.ip;
+
+        result.networking.loadBalancer = {
+          hostname: hostname || undefined,
+          ip: ip || undefined,
+          status: (hostname || ip) ? "deployed" : "degraded",
+        };
+      } else {
+        result.networking.loadBalancer = {
+          status: "missing",
+        };
+      }
+    } catch (e) {
+      result.networking.loadBalancer = {
+        status: "unknown",
+      };
+    }
+  } else {
+    result.networking.loadBalancer = {
+      status: "missing",
+    };
+  }
+
+  // Calculate Pod Summary (always try)
+  const podsSummaryCheck = await kubectl(
+    ["get", "pods", "-n", ns, "--no-headers", "-o", "json"],
+    { AWS_PROFILE: input.awsProfile, AWS_REGION: input.awsRegion }
+  );
+
+  if (podsSummaryCheck.ok) {
+    try {
+      const podsData = JSON.parse(podsSummaryCheck.stdout);
+      const pods = podsData.items || [];
+      result.podSummary.total = pods.length;
+      result.podSummary.running = pods.filter((p: any) => {
+        const phase = p.status?.phase;
+        const containerStatuses = p.status?.containerStatuses || [];
+        const ready = containerStatuses.length > 0 && containerStatuses.every((c: any) => c.ready);
+        return phase === "Running" && ready;
+      }).length;
+    } catch (e) {
+      // Ignore parse errors
+    }
+  }
+
+  // Only check detailed Kubernetes resources if cluster is active (but we already checked components above)
   if (result.cluster.status === "deployed") {
     // 5. Check EKS Addons
     const addonsToCheck = [
@@ -267,14 +491,28 @@ export async function runStatus(input: StatusInput): Promise<StatusResult> {
     result.kubernetes.addons.status = allAddonsDeployed ? "deployed" : "degraded";
 
     // 6. Check StorageClass
-    const scCheck = await kubectl(
+    // The Helm chart "ingext-aws-gp3" creates a StorageClass
+    // New installations use "ingext-aws-gp3", older ones may use "gp3"
+    let scCheck = await kubectl(
       ["get", "storageclass", "ingext-aws-gp3", "-o", "json"],
       { AWS_PROFILE: input.awsProfile, AWS_REGION: input.awsRegion }
     );
     
+    let storageClassName = "ingext-aws-gp3";
+    if (!scCheck.ok) {
+      // Fallback to legacy name for backward compatibility
+      scCheck = await kubectl(
+        ["get", "storageclass", "gp3", "-o", "json"],
+        { AWS_PROFILE: input.awsProfile, AWS_REGION: input.awsRegion }
+      );
+      if (scCheck.ok) {
+        storageClassName = "gp3";
+      }
+    }
+    
     if (scCheck.ok) {
       result.kubernetes.storageClass.status = "deployed";
-      result.kubernetes.storageClass.name = "ingext-aws-gp3";
+      result.kubernetes.storageClass.name = storageClassName;
     } else {
       result.kubernetes.storageClass.status = "missing";
     }
@@ -398,6 +636,17 @@ export async function runStatus(input: StatusInput): Promise<StatusResult> {
       } catch (e) {
         // Ignore parse errors
       }
+    } else if (helmListCheck.exitCode === 127 || helmListCheck.stderr.includes("Command not found")) {
+      // Helm not installed - provide helpful message based on exec mode
+      const execMode = getExecMode();
+      if (execMode === "docker") {
+        // In docker mode, helm should be available, so this is unexpected
+        result.helm.error = "Helm not found in Docker container. This may indicate a Docker configuration issue.";
+      } else {
+        // In local mode, suggest installing helm or using docker
+        result.helm.error = "Helm not found. Install helm or use --exec docker to run in Docker container.";
+      }
+      result.helm.releases = [];
     }
   }
 
@@ -450,10 +699,21 @@ export async function runStatus(input: StatusInput): Promise<StatusResult> {
 
   result.readiness.phase3Compute = result.readiness.phase2Storage && hasKarpenter;
 
-  const hasCoreServices = result.helm.releases.some(r => 
-    r.name.includes("etcd") || r.name.includes("ingext-stack")
+  // Phase 4: Core Services - check for required Helm releases and pod readiness
+  const requiredCoreReleases = ["ingext-stack", "etcd-single", "etcd-single-cronjob"];
+  const hasAllCoreReleases = requiredCoreReleases.every(releaseName =>
+    result.helm.releases.some(r => r.name === releaseName && r.status === "deployed")
   );
-  result.readiness.phase4CoreServices = result.readiness.phase3Compute && hasCoreServices;
+  
+  // Check if pods from core services are ready
+  const corePodsReady = result.kubernetes.workloads?.pods?.every(p => p.ready) || false;
+  const hasCorePods = (result.kubernetes.workloads?.pods?.length || 0) > 0;
+  
+  // Phase 4 is complete if all releases are deployed and pods are ready
+  result.readiness.phase4CoreServices = 
+    result.readiness.phase3Compute && 
+    hasAllCoreReleases && 
+    (corePodsReady || !hasCorePods); // Allow if no pods yet (charts may not create pods immediately)
 
   const hasStream = result.helm.releases.some(r => r.name.includes("ingext-community"));
   result.readiness.phase5Stream = result.readiness.phase4CoreServices && hasStream;

@@ -14,6 +14,7 @@ export type PreflightResult = {
   blockers: { code: string; message: string }[];
   remediation: { message: string }[];
   env: Record<string, string>;
+  envFile?: string; // Namespace-scoped env file path (e.g., lakehouse_ingext.env)
   evidence: {
     awsAccountId?: string;
     awsArn?: string;
@@ -50,13 +51,25 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
         message: "Docker is required in docker execution mode but is not available.",
       });
       remediation.push({
-        message: "Install Docker Desktop and ensure it's running.",
+        message: "⚠️  ACTION REQUIRED: Start Docker Desktop",
       });
       remediation.push({
-        message: "Verify with: docker version",
+        message: "   1. Open Docker Desktop application",
       });
       remediation.push({
-        message: "Or use --exec local to run tools from your local system.",
+        message: "   2. Wait for Docker to fully start (whale icon in menu bar should be steady)",
+      });
+      remediation.push({
+        message: "   3. Verify with: docker version",
+      });
+      remediation.push({
+        message: "   4. Then re-run this command",
+      });
+      remediation.push({
+        message: "",
+      });
+      remediation.push({
+        message: "   Alternative: Use --exec local (requires eksctl, kubectl, helm installed locally)",
       });
 
       return {
@@ -65,7 +78,7 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
         remediation,
         env: {},
         evidence,
-        next: { action: "stop", reason: "Docker is not available. Install Docker or use --exec local." },
+        next: { action: "stop", reason: "Docker is not available. Start Docker Desktop or use --exec local." },
       };
     }
     evidence.dockerVersion = dockerCheck.version;
@@ -137,9 +150,70 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
       });
     }
   } else {
-    // User provided cert ARN explicitly
-    evidence.certArn = certArn;
-    evidence.certAutoDiscovered = false;
+    // User provided cert ARN explicitly - validate it
+    console.error(`⏳ Validating provided certificate: ${certArn}...`);
+    const { describeCertificate } = await import("./tools/acm.js");
+    const certDescribe = await describeCertificate(certArn, input.awsRegion);
+    
+    if (!certDescribe.ok) {
+      blockers.push({
+        code: "INVALID_CERT_ARN",
+        message: `Failed to describe certificate ${certArn}: ${certDescribe.error}`,
+      });
+      remediation.push({
+        message: `Verify the certificate ARN is correct and in ${input.awsRegion}`,
+      });
+      remediation.push({
+        message: `List certificates: aws acm list-certificates --region ${input.awsRegion}`,
+      });
+    } else {
+      const cert = certDescribe.data?.Certificate;
+      const certStatus = cert?.Status;
+      const certDomain = cert?.DomainName;
+      const certSubjectAltNames = cert?.SubjectAlternativeNames || [];
+      
+      // Check certificate status
+      if (certStatus !== "ISSUED") {
+        blockers.push({
+          code: "CERT_NOT_ISSUED",
+          message: `Certificate ${certArn} status is ${certStatus}, must be ISSUED`,
+        });
+        remediation.push({
+          message: `Wait for certificate validation to complete or use a different certificate`,
+        });
+      }
+      
+      // Check if certificate covers the domain
+      const domainCovered = certSubjectAltNames.some((san: string) => {
+        // Exact match
+        if (san === siteDomain) return true;
+        // Wildcard match
+        if (san.startsWith("*.")) {
+          const wildcardBase = san.slice(2);
+          return siteDomain.endsWith(wildcardBase);
+        }
+        return false;
+      });
+      
+      if (!domainCovered) {
+        blockers.push({
+          code: "CERT_DOMAIN_MISMATCH",
+          message: `Certificate does not cover ${siteDomain}. Covers: ${certSubjectAltNames.join(", ")}`,
+        });
+        remediation.push({
+          message: `Use a certificate that covers ${siteDomain} or update --domain to match the certificate`,
+        });
+      }
+      
+      // If validation passed, store evidence
+      if (certStatus === "ISSUED" && domainCovered) {
+        evidence.certArn = certArn;
+        evidence.certDomain = certDomain;
+        evidence.certIsWildcard = certDomain?.startsWith("*.");
+        evidence.certAutoDiscovered = false;
+        console.error(`✓ Certificate validated: ${certDomain} (status: ${certStatus})`);
+      }
+    }
   }
 
   // NOW show domain confirmation with discovery results
@@ -227,12 +301,17 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
   };
 
   // Optional env file artifact
+  // Compute namespace-scoped env file path
+  // Default: lakehouse_{namespace}.env (e.g., lakehouse_ingext.env)
+  const envFilePath = input.outputEnvPath || `./lakehouse_${input.namespace}.env`;
+  
   // Check if we can proceed (no blockers so far)
   let okToInstall = blockers.length === 0;
   
   if (input.writeEnvFile && okToInstall) {
     const lines = [
       "# Generated by Lakehouse.AWS preflight skill",
+      `# Namespace: ${env.NAMESPACE}`,
       `export AWS_PROFILE="${env.AWS_PROFILE}"`,
       `export AWS_REGION="${env.AWS_REGION}"`,
       `export CLUSTER_NAME="${env.CLUSTER_NAME}"`,
@@ -247,11 +326,11 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
       `export PREFLIGHT_HAS_ADMIN="${env.PREFLIGHT_HAS_ADMIN}"`,
       `export PREFLIGHT_HAS_DNS="${env.PREFLIGHT_HAS_DNS}"`,
     ];
-    const w = await writeEnvFile(input.outputEnvPath, lines, input.overwriteEnv);
+    const w = await writeEnvFile(envFilePath, lines, input.overwriteEnv);
     if (!w.ok) {
       blockers.push({ code: "ENV_WRITE_BLOCKED", message: w.error });
     } else {
-      console.error(`✓ Environment file written to: ${input.outputEnvPath}`);
+      console.error(`✓ Environment file written to: ${envFilePath}`);
     }
   }
 
@@ -265,6 +344,7 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
     blockers,
     remediation,
     env,
+    envFile: envFilePath,
     evidence,
     next: okToInstall ? { action: "install", reason: "Preflight passed." } : { action: "stop", reason: "Resolve blockers." },
   };

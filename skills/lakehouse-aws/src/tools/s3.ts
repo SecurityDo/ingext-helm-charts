@@ -66,3 +66,11 @@ export async function putPublicAccessBlock(bucket: string, region: string, profi
     { AWS_PROFILE: profile, AWS_DEFAULT_REGION: region }
   );
 }
+
+export async function deleteBucket(bucket: string, region: string, profile: string) {
+  return run(
+    "aws",
+    ["s3", "rb", `s3://${bucket}`, "--force", "--region", region],
+    { AWS_PROFILE: profile, AWS_DEFAULT_REGION: region }
+  );
+}

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
+import { startSpinner, stopSpinner } from "./spinner.js";
 
 export type ExecMode = "docker" | "local";
 
@@ -13,7 +14,7 @@ export function execCmd(
   mode: ExecMode,
   cmd: string,
   args: string[],
-  opts?: { env?: Record<string, string>; cwd?: string }
+  opts?: { env?: Record<string, string>; cwd?: string; verbose?: boolean }
 ): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
     // Determine the actual command and args based on execution mode
@@ -33,7 +34,6 @@ export function execCmd(
         cwd: opts?.cwd ?? process.cwd(),
         stdio: ["ignore", "pipe", "pipe"],
       };
-      console.error(`[DEBUG] Docker exec: ${fullCmd} ${fullArgs.join(" ")}`);
     } else {
       // Local execution
       fullCmd = cmd;
@@ -46,16 +46,61 @@ export function execCmd(
     }
 
     const child = spawn(fullCmd, fullArgs, execOpts);
-    console.error(`[DEBUG] Spawned PID: ${child.pid}`);
 
     let stdout = "";
     let stderr = "";
 
-    child.stdout?.on("data", (d) => (stdout += d.toString()));
-    child.stderr?.on("data", (d) => (stderr += d.toString()));
+    // For long-running commands (like eksctl create cluster), stream output to show progress
+    // This allows users to see eksctl's progress messages in real-time
+    const isLongRunningCommand = (cmd === "eksctl" && args[0] === "create" && args[1] === "cluster") ||
+                                 (cmd === "eksctl" && args[0] === "delete" && args[1] === "cluster") ||
+                                 (cmd === "helm" && args.includes("--wait"));
+    
+    // Start spinner for short-running commands (not verbose mode)
+    const showSpinner = !isLongRunningCommand && !opts?.verbose;
+    if (showSpinner) {
+      const commandDesc = `${cmd} ${args.slice(0, 2).join(" ")}${args.length > 2 ? "..." : ""}`;
+      startSpinner(`Running ${commandDesc}`);
+    }
+    
+    if (isLongRunningCommand) {
+      // Stream both stdout and stderr to console so user sees progress in real-time
+      child.stdout?.on("data", (d) => {
+        const output = d.toString();
+        stdout += output;
+        // Forward to stderr so user sees it (eksctl outputs progress to stdout)
+        process.stderr.write(output);
+      });
+      
+      child.stderr?.on("data", (d) => {
+        const output = d.toString();
+        stderr += output;
+        // Forward eksctl progress messages to stderr
+        process.stderr.write(output);
+      });
+    } else {
+      // For regular commands, just collect output
+      child.stdout?.on("data", (d) => (stdout += d.toString()));
+      child.stderr?.on("data", (d) => (stderr += d.toString()));
+    }
 
-    child.on("error", (err) => reject(err));
+    child.on("error", (err: any) => {
+      if (showSpinner) stopSpinner();
+      
+      // Handle ENOENT (command not found) gracefully
+      if (err.code === "ENOENT") {
+        resolve({
+          code: 127, // Standard "command not found" exit code
+          stdout: "",
+          stderr: `Command not found: ${cmd}. ${mode === "local" ? "Install it or use --exec docker to run in Docker container." : "This should not happen in Docker mode."}`,
+        });
+      } else {
+        reject(err);
+      }
+    });
     child.on("close", (code) => {
+      if (showSpinner) stopSpinner();
+      
       resolve({
         code: code ?? 1,
         stdout: stdout.trim(),

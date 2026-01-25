@@ -22,7 +22,7 @@ export const PreflightInputSchema = z.object({
     })
     .default({ hasBilling: true, hasAdmin: true, hasDns: true }),
 
-  outputEnvPath: z.string().default("./lakehouse-aws.env"),
+  outputEnvPath: z.string().optional(), // If not provided, will be computed as lakehouse_{namespace}.env
   writeEnvFile: z.boolean().default(true),
   overwriteEnv: z.boolean().default(false),
   dnsCheck: z.boolean().default(true),
@@ -32,3 +32,11 @@ export const PreflightInputSchema = z.object({
 });
 
 export type PreflightInput = z.infer<typeof PreflightInputSchema>;
+
+// Install schema extends preflight and adds install-specific fields
+export const InstallInputSchema = PreflightInputSchema.extend({
+  force: z.boolean().optional().default(false), // Force flag to bypass health checks (only for install operations)
+  verbose: z.boolean().optional().default(true), // Verbose mode: show detailed progress (default true for user feedback)
+});
+
+export type InstallInput = z.infer<typeof InstallInputSchema>;

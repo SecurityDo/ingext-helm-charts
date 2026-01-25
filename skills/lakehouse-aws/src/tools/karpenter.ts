@@ -73,17 +73,32 @@ export async function repairKarpenter(
   region: string,
   clusterName: string
 ) {
-  // First attempt to rollback any pending/failed release to clear locks
-  const rollback = await run(
+  // Step 1: Attempt to clear Helm lock by deleting the secret
+  await run(
     "bash",
-    ["-c", `helm rollback karpenter -n kube-system 2>&1 || true`],
+    ["-c", `kubectl delete secret -n kube-system -l owner=helm,name=karpenter 2>&1 || true`],
     { AWS_PROFILE: profile, AWS_DEFAULT_REGION: region }
   );
   
-  // Wait a moment for rollback to settle
-  await new Promise(resolve => setTimeout(resolve, 5000));
+  // Step 2: Force uninstall the stuck release
+  await run(
+    "bash",
+    ["-c", `helm uninstall karpenter -n kube-system --wait --timeout 5m 2>&1 || true`],
+    { AWS_PROFILE: profile, AWS_DEFAULT_REGION: region }
+  );
   
-  // Now attempt helm upgrade with longer timeout (10 minutes)
+  // Step 3: Wait for resources to clear
+  await new Promise(resolve => setTimeout(resolve, 10000)); // 10s wait
+  
+  // Step 4: Clean up any remaining pods/deployments
+  await kubectl(
+    ["delete", "deployment", "karpenter", "-n", "kube-system", "--ignore-not-found=true"],
+    { AWS_PROFILE: profile, AWS_REGION: region }
+  );
+  
+  await new Promise(resolve => setTimeout(resolve, 5000)); // 5s wait
+  
+  // Step 5: Fresh install
   return run(
     "bash",
     ["-c", `
@@ -114,4 +129,86 @@ export async function checkKarpenterReady(
   );
   
   return { ready: rolloutCheck.ok };
+}
+
+export type KarpenterDiagnostics = {
+  podLogs: string;
+  podEvents: string;
+  helmHistory: string;
+  deploymentStatus: string;
+};
+
+export async function captureKarpenterDiagnostics(
+  profile: string,
+  region: string
+): Promise<KarpenterDiagnostics> {
+  const diagnostics: KarpenterDiagnostics = {
+    podLogs: "",
+    podEvents: "",
+    helmHistory: "",
+    deploymentStatus: "",
+  };
+
+  // Capture pod logs (last 50 lines from first pod)
+  const podsResult = await kubectl(
+    ["get", "pods", "-n", "kube-system", "-l", "app.kubernetes.io/name=karpenter", "-o", "json"],
+    { AWS_PROFILE: profile, AWS_REGION: region }
+  );
+  
+  if (podsResult.ok) {
+    try {
+      const podsData = JSON.parse(podsResult.stdout);
+      const pods = podsData.items || [];
+      if (pods.length > 0) {
+        const podName = pods[0].metadata.name;
+        const logsResult = await kubectl(
+          ["logs", "-n", "kube-system", podName, "--tail=50"],
+          { AWS_PROFILE: profile, AWS_REGION: region }
+        );
+        if (logsResult.ok) {
+          diagnostics.podLogs = logsResult.stdout;
+        }
+        
+        // Capture pod events
+        const describeResult = await kubectl(
+          ["describe", "pod", "-n", "kube-system", podName],
+          { AWS_PROFILE: profile, AWS_REGION: region }
+        );
+        if (describeResult.ok) {
+          const lines = describeResult.stdout.split("\n");
+          const eventsIndex = lines.findIndex(line => line.startsWith("Events:"));
+          if (eventsIndex !== -1) {
+            diagnostics.podEvents = lines.slice(eventsIndex).join("\n");
+          }
+        }
+      }
+    } catch (e) {
+      // Ignore parse errors
+    }
+  }
+
+  // Capture Helm history
+  const historyResult = await helm(
+    ["history", "karpenter", "-n", "kube-system", "--max", "10"],
+    { AWS_PROFILE: profile, AWS_REGION: region }
+  );
+  if (historyResult.ok) {
+    diagnostics.helmHistory = historyResult.stdout;
+  }
+
+  // Capture deployment status
+  const deployResult = await kubectl(
+    ["get", "deployment", "karpenter", "-n", "kube-system", "-o", "json"],
+    { AWS_PROFILE: profile, AWS_REGION: region }
+  );
+  if (deployResult.ok) {
+    try {
+      const deploy = JSON.parse(deployResult.stdout);
+      diagnostics.deploymentStatus = `Ready: ${deploy.status?.readyReplicas || 0}/${deploy.spec?.replicas || 0}`;
+    } catch (e) {
+      diagnostics.deploymentStatus = deployResult.stdout;
+    }
+  }
+
+  return diagnostics;
 }

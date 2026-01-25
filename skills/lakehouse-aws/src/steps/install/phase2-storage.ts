@@ -27,11 +27,12 @@ export type Phase2Evidence = {
   };
 };
 
-export async function runPhase2Storage(env: Record<string, string>): Promise<{
+export async function runPhase2Storage(env: Record<string, string>, options?: { verbose?: boolean }): Promise<{
   ok: boolean;
   evidence: Phase2Evidence;
   blockers: Array<{ code: string; message: string }>;
 }> {
+  const verbose = options?.verbose !== false;
   const blockers: Array<{ code: string; message: string }> = [];
   
   const clusterName = env.CLUSTER_NAME;

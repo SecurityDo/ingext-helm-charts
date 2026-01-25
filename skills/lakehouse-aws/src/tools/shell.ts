@@ -13,6 +13,10 @@ export function setExecMode(mode: ExecMode) {
   EXEC_MODE = mode;
 }
 
+export function getExecMode(): ExecMode {
+  return EXEC_MODE;
+}
+
 export function run(cmd: string, args: string[], env?: Record<string, string>): Promise<ShellResult> {
   return execCmd(EXEC_MODE, cmd, args, { env }).then((r) => ({
     ok: r.code === 0,
