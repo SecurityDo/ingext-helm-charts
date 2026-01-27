@@ -56,28 +56,59 @@ export function execCmd(
                                  (cmd === "eksctl" && args[0] === "delete" && args[1] === "cluster") ||
                                  (cmd === "helm" && args.includes("--wait"));
     
-    // Start spinner for short-running commands (not verbose mode)
-    const showSpinner = !isLongRunningCommand && !opts?.verbose;
+    // Start spinner only for short-running commands, when not verbose, and when stderr is a TTY.
+    // When stderr is not a TTY (e.g. piped, CI, or some terminals), \r doesn't clear the line
+    // and spinner output appends instead of updating in place.
+    const showSpinner = !isLongRunningCommand && !opts?.verbose && typeof process.stderr.isTTY === "boolean" && process.stderr.isTTY;
     if (showSpinner) {
       const commandDesc = `${cmd} ${args.slice(0, 2).join(" ")}${args.length > 2 ? "..." : ""}`;
       startSpinner(`Running ${commandDesc}`);
     }
     
     if (isLongRunningCommand) {
-      // Stream both stdout and stderr to console so user sees progress in real-time
-      child.stdout?.on("data", (d) => {
-        const output = d.toString();
-        stdout += output;
-        // Forward to stderr so user sees it (eksctl outputs progress to stdout)
-        process.stderr.write(output);
-      });
-      
-      child.stderr?.on("data", (d) => {
-        const output = d.toString();
-        stderr += output;
-        // Forward eksctl progress messages to stderr
-        process.stderr.write(output);
-      });
+      const isEksctlCreate = cmd === "eksctl" && args[0] === "create" && args[1] === "cluster";
+      // For eksctl create cluster, only stream errors and important warnings to reduce noise
+      const shouldForwardLine = (line: string): boolean => {
+        if (!isEksctlCreate) return true;
+        const t = line.trim();
+        if (!t) return false;
+        if (/\[\s*✖\s*\]|Error:|failed to|AlreadyExistsException|already exists/i.test(t)) return true;
+        if (/\[!\].*error|\[!\].*fail/i.test(t)) return true;
+        return false;
+      };
+      const stdoutLineBuf = { buf: "" };
+      const stderrLineBuf = { buf: "" };
+      const flushAndMaybeForward = (chunk: string, buf: { buf: string }) => {
+        buf.buf += chunk;
+        const lines = buf.buf.split("\n");
+        buf.buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (shouldForwardLine(line)) process.stderr.write(line + "\n");
+        }
+      };
+      if (isEksctlCreate) {
+        child.stdout?.on("data", (d) => {
+          const out = d.toString();
+          stdout += out;
+          flushAndMaybeForward(out, stdoutLineBuf);
+        });
+        child.stderr?.on("data", (d) => {
+          const out = d.toString();
+          stderr += out;
+          flushAndMaybeForward(out, stderrLineBuf);
+        });
+      } else {
+        child.stdout?.on("data", (d) => {
+          const output = d.toString();
+          stdout += output;
+          process.stderr.write(output);
+        });
+        child.stderr?.on("data", (d) => {
+          const output = d.toString();
+          stderr += output;
+          process.stderr.write(output);
+        });
+      }
     } else {
       // For regular commands, just collect output
       child.stdout?.on("data", (d) => (stdout += d.toString()));

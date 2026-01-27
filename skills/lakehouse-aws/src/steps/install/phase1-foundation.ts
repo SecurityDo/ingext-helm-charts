@@ -163,6 +163,7 @@ export async function runPhase1Foundation(env: Record<string, string>, options?:
   }
 
   // 2. Create cluster if missing
+  let usedExistingClusterFromConflict = false;
   if (!clusterCheck.exists) {
     // Check for orphaned CloudFormation stacks from previous failed attempts
     if (verbose) {
@@ -702,10 +703,21 @@ export async function runPhase1Foundation(env: Record<string, string>, options?:
         message: errorMsg,
       });
     } else if (hasCloudFormationConflict) {
-      if (verbose) {
-        console.error(`\n⚠️  CloudFormation conflict detected: Stack 'eksctl-${clusterName}-cluster' already exists.`);
-        console.error(`   ⏳ Automatically cleaning up the conflicting stack and retrying...`);
+      // Stack exists — check if we can use the existing cluster instead of deleting it
+      const existingStatus = await describeCluster(clusterName, profile, region);
+      if (existingStatus.found && (existingStatus.status === "ACTIVE" || existingStatus.status === "CREATING")) {
+        if (verbose) {
+          console.error(`\n✓ Stack already exists; cluster '${clusterName}' is ${existingStatus.status}. Using it.\n`);
+        }
+        evidence.eks.existed = true;
+        evidence.eks.created = false;
+        usedExistingClusterFromConflict = true;
       }
+      if (!usedExistingClusterFromConflict) {
+        if (verbose) {
+          console.error(`\n⚠️  CloudFormation conflict detected: Stack 'eksctl-${clusterName}-cluster' already exists.`);
+          console.error(`   Cluster not found or not usable — cleaning up stack and retrying...`);
+        }
       
       // Attempt to clean up the conflicting stack
       const cleanupResult = await deleteCloudFormationStack(`eksctl-${clusterName}-cluster`, profile, region, { 
@@ -713,8 +725,15 @@ export async function runPhase1Foundation(env: Record<string, string>, options?:
       });
       
       if (cleanupResult.ok) {
-        if (verbose) console.error(`   ⏳ Waiting for stack deletion to complete...`);
-        const waitResult = await waitForStacksDeleted([`eksctl-${clusterName}-cluster`], profile, region, 15);
+        if (verbose) console.error(`   ⏳ Waiting for stack deletion (polls every 15s, proceeds when done; up to 25 minutes)...`);
+        let waitResult = await waitForStacksDeleted([`eksctl-${clusterName}-cluster`], profile, region, 25);
+        
+        // If still remaining after first wait, retry delete with dependency cleanup and wait again
+        if (!waitResult.ok && waitResult.remaining.length > 0 && verbose) {
+          console.error(`   ⏳ Stack still deleting or stuck. Retrying cleanup, then waiting (polls every 15s; up to 10 min)...`);
+          await deleteCloudFormationStack(`eksctl-${clusterName}-cluster`, profile, region, { cleanupDependencies: true });
+          waitResult = await waitForStacksDeleted(waitResult.remaining, profile, region, 10);
+        }
         
         if (waitResult.ok) {
           if (verbose) console.error(`   ✓ Conflicting stack cleaned up. Retrying cluster creation...`);
@@ -745,19 +764,23 @@ export async function runPhase1Foundation(env: Record<string, string>, options?:
             return { ok: false, evidence, blockers };
           }
         } else {
+          const failedDetail = waitResult.failed && waitResult.failed.length > 0
+            ? ` Stuck/failed resources: ${waitResult.failed.map(f => f.name + (f.resources?.length ? ` (${f.resources.slice(0, 3).join(", ")}${f.resources.length > 3 ? "…" : ""})` : "")).join("; ")}.`
+            : "";
           blockers.push({
             code: "CLOUDFORMATION_CLEANUP_FAILED",
-            message: `Failed to clean up conflicting CloudFormation stack: ${waitResult.remaining.join(", ")}`,
+            message: `Failed to clean up conflicting CloudFormation stack: ${waitResult.remaining.join(", ")}.${failedDetail} Check AWS CloudFormation console and remove any stuck resources, then run install again.`,
           });
           return { ok: false, evidence, blockers };
         }
       } else {
         blockers.push({
           code: "CLOUDFORMATION_DELETE_INIT_FAILED",
-          message: `Failed to initiate deletion of conflicting CloudFormation stack: ${cleanupResult.stderr}`,
+          message: `Failed to initiate deletion of conflicting CloudFormation stack: ${cleanupResult.stderr || "unknown error"}`,
         });
         return { ok: false, evidence, blockers };
       }
+      } // !usedExistingClusterFromConflict
     } else {
         const errorPreview = createResult.stderr.length > 300 
           ? createResult.stderr.substring(0, 300) + "..."
@@ -768,13 +791,15 @@ export async function runPhase1Foundation(env: Record<string, string>, options?:
           message: `Failed to create EKS cluster: ${createResult.stderr}`,
         });
       }
-      return { ok: false, evidence, blockers };
+      if (!usedExistingClusterFromConflict) return { ok: false, evidence, blockers };
     }
-    evidence.eks.created = true;
-    if (verbose) {
-      console.error(`✓ Cluster creation command sent`);
-      console.error(`⏳ Cluster creation in progress (this takes ~15 minutes)...`);
-      console.error(`   You can monitor progress in AWS Console or wait here.`);
+    if (!usedExistingClusterFromConflict) {
+      evidence.eks.created = true;
+      if (verbose) {
+        console.error(`✓ Cluster creation command sent`);
+        console.error(`⏳ Cluster creation in progress (this takes ~15 minutes)...`);
+        console.error(`   You can monitor progress in AWS Console or wait here.`);
+      }
     }
   }
   

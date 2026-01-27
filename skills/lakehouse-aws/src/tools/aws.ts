@@ -1294,8 +1294,9 @@ async function checkStackDeleted(
 }
 
 /**
- * Wait for multiple CloudFormation stacks to be deleted in parallel
- * Polls all stacks together and removes them from the array as they complete
+ * Wait for multiple CloudFormation stacks to be deleted in parallel.
+ * Polls every 15 seconds and returns as soon as all stacks are deleted;
+ * maxWaitMinutes is only an upper bound—the call does not block for the full duration if deletion finishes earlier.
  */
 export async function waitForStacksDeleted(
   stackNames: string[],
@@ -1307,17 +1308,19 @@ export async function waitForStacksDeleted(
     return { ok: true, deleted: [], remaining: [] };
   }
   
-  const maxAttempts = maxWaitMinutes * 4; // Check every 15 seconds
+  const pollIntervalSeconds = 15;
+  const maxAttempts = Math.floor((maxWaitMinutes * 60) / pollIntervalSeconds);
   let attempts = 0;
   let remainingStacks = [...stackNames];
   const deletedStacks: string[] = [];
+  const stderrIsTTY = typeof process.stderr.isTTY === "boolean" && process.stderr.isTTY;
   
   // Track when resources first appeared as stuck (for proactive cleanup)
   const stuckResourceTimestamps: Map<string, number> = new Map();
   const stuckThresholdMinutes = 5; // Clean up dependencies if stuck > 5 minutes
   
   while (attempts < maxAttempts && remainingStacks.length > 0) {
-    await new Promise(resolve => setTimeout(resolve, 15000));
+    await new Promise(resolve => setTimeout(resolve, pollIntervalSeconds * 1000));
     attempts++;
     const currentTime = Date.now();
     
@@ -1391,7 +1394,7 @@ export async function waitForStacksDeleted(
     
     // Proactively clean up dependencies for stuck resources
     if (stacksNeedingCleanup.length > 0) {
-      process.stderr.write(`\r${" ".repeat(120)}\r`); // Clear line
+      if (stderrIsTTY) process.stderr.write(`\r${" ".repeat(120)}\r`);
       process.stderr.write(`   ⚠️  Resources stuck in DELETE_IN_PROGRESS for >${stuckThresholdMinutes} minutes. Cleaning up dependencies...\n`);
       
       for (const stackName of stacksNeedingCleanup) {
@@ -1413,27 +1416,38 @@ export async function waitForStacksDeleted(
     remainingStacks = stillRemaining;
     
     // Show progress with resource details
-    const minutes = Math.floor(attempts * 15 / 60);
-    const seconds = (attempts * 15) % 60;
+    const elapsedSeconds = attempts * pollIntervalSeconds;
+    const minutes = Math.floor(elapsedSeconds / 60);
+    const seconds = elapsedSeconds % 60;
     const deletedCount = deletedStacks.length;
     const totalCount = stackNames.length;
     
-    // Clear previous line and write new status
+    // Clear previous line and write new status (use \r in-place only when stderr is a TTY)
+    const progressPrefix = `   [${minutes}m ${seconds}s] Deleted ${deletedCount}/${totalCount} stacks. `;
     if (resourceStatuses.length > 0) {
-      // Show resource-level progress with dependency info
       const statusLine = resourceStatuses[0];
       const maxLineLength = 120;
       const displayLine = statusLine.length > maxLineLength 
         ? statusLine.substring(0, maxLineLength - 3) + "..."
         : statusLine;
-      process.stderr.write(`\r   [${minutes}m ${seconds}s] Deleted ${deletedCount}/${totalCount} stacks. ${displayLine}${" ".repeat(50)}`);
+      const line = progressPrefix + displayLine;
+      if (stderrIsTTY) {
+        process.stderr.write(`\r${line}${" ".repeat(50)}\r`);
+      } else {
+        process.stderr.write(`${line}\n`);
+      }
     } else {
-      process.stderr.write(`\r   [${minutes}m ${seconds}s] Deleted ${deletedCount}/${totalCount} stacks, ${remainingStacks.length} remaining...${" ".repeat(30)}`);
+      const line = `   [${minutes}m ${seconds}s] Deleted ${deletedCount}/${totalCount} stacks, ${remainingStacks.length} remaining...`;
+      if (stderrIsTTY) {
+        process.stderr.write(`\r${line}${" ".repeat(30)}\r`);
+      } else {
+        process.stderr.write(`${line}\n`);
+      }
     }
     
     // If any stacks failed, return early with failure info
     if (failedStacks.length > 0) {
-      process.stderr.write(`\r${" ".repeat(120)}\r`); // Clear line
+      if (stderrIsTTY) process.stderr.write(`\r${" ".repeat(120)}\r`);
       return {
         ok: false,
         deleted: deletedStacks,
@@ -1443,7 +1457,7 @@ export async function waitForStacksDeleted(
     }
   }
   
-  process.stderr.write(`\r${" ".repeat(120)}\r`); // Clear line with more space
+  if (stderrIsTTY) process.stderr.write(`\r${" ".repeat(120)}\r`);
   
   return {
     ok: remainingStacks.length === 0,
