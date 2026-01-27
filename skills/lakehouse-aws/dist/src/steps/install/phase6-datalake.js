@@ -1,5 +1,5 @@
-import { kubectl } from "../../tools/kubectl.js";
-import { upgradeInstall, helm } from "../../tools/helm.js";
+import { kubectl, waitForPodsReady } from "../../tools/kubectl.js";
+import { upgradeInstall, helm, isHelmLocked, waitForHelmReady } from "../../tools/helm.js";
 import { headBucket } from "../../tools/aws.js";
 import { checkKarpenterReady, checkKarpenterInstalled } from "../../tools/karpenter.js";
 import { eksctl } from "../../tools/eksctl.js";
@@ -130,53 +130,23 @@ export async function runPhase6Datalake(env, options = {}) {
             notReady: [],
         },
     };
-    // Gate A: Stream Health - Check Phase 5 pods (api-0, platform-0) are Ready
-    const streamPodsCheck = await kubectl(["get", "pods", "-n", namespace, "-o", "json"], { AWS_PROFILE: profile, AWS_REGION: region });
-    if (streamPodsCheck.ok) {
-        try {
-            const podsData = JSON.parse(streamPodsCheck.stdout);
-            const pods = podsData.items || [];
-            let apiReady = false;
-            let platformReady = false;
-            for (const pod of pods) {
-                const podName = pod.metadata?.name || "";
-                const readyCondition = pod.status?.conditions?.find((c) => c.type === "Ready");
-                const isReady = readyCondition && readyCondition.status === "True";
-                if (podName.startsWith("api-")) {
-                    apiReady = isReady;
-                }
-                else if (podName.startsWith("platform-")) {
-                    platformReady = isReady;
-                }
-            }
-            evidence.gates.streamHealthy = apiReady && platformReady;
-            if (!evidence.gates.streamHealthy && !options.force) {
-                blockers.push({
-                    code: "STREAM_PODS_NOT_READY",
-                    message: `Phase 5 Stream pods (api-0, platform-0) are not all ready. Ensure Phase 5 completes successfully before proceeding. Use --force to bypass.`,
-                });
-                return { ok: false, evidence, blockers };
-            }
-        }
-        catch (e) {
-            // Ignore parse errors, but don't mark as healthy
-            if (!options.force) {
-                blockers.push({
-                    code: "STREAM_PODS_CHECK_FAILED",
-                    message: `Failed to check Phase 5 Stream pods status. Use --force to bypass.`,
-                });
-                return { ok: false, evidence, blockers };
-            }
-        }
-    }
-    else {
-        if (!options.force) {
-            blockers.push({
-                code: "STREAM_PODS_CHECK_FAILED",
-                message: `Failed to check Phase 5 Stream pods: ${streamPodsCheck.stderr}. Use --force to bypass.`,
-            });
-            return { ok: false, evidence, blockers };
-        }
+    // Gate A: Stream Health - Check Phase 5 pods (api-0, platform-0) are Ready (graceful wait)
+    if (verbose)
+        console.error(`   Checking Phase 5 (Stream) pods readiness...`);
+    const streamWait = await waitForPodsReady(namespace, profile, region, {
+        maxWaitMinutes: 5,
+        verbose,
+        description: "Phase 5 (Stream) pods",
+        // Specifically looking for api and platform pods
+        labelSelector: "ingext.io/app in (api, platform)"
+    });
+    evidence.gates.streamHealthy = streamWait.ok;
+    if (!streamWait.ok && !options.force) {
+        blockers.push({
+            code: "STREAM_PODS_NOT_READY",
+            message: `Phase 5 Stream pods are not all ready after waiting. Ensure Phase 5 completes successfully before proceeding. Use --force to bypass.`,
+        });
+        return { ok: false, evidence, blockers };
     }
     // Gate B: Storage Readiness - Verify S3 bucket exists and accessible, pod identity association exists
     const bucketCheck = await headBucket(bucketName, profile, region);
@@ -286,6 +256,44 @@ export async function runPhase6Datalake(env, options = {}) {
                 message: `Karpenter is not installed. Node pools require Karpenter. Run Phase 3: Compute to install it. Use --force to bypass.`,
             });
             return { ok: false, evidence, blockers };
+        }
+    }
+    // Step 1: Check if already deployed and healthy (Smart Resume)
+    const currentHelmReleases = await helm(["list", "-a", "-n", namespace, "-o", "json"], { AWS_PROFILE: profile, AWS_REGION: region });
+    let deployedReleases = [];
+    if (currentHelmReleases.ok) {
+        try {
+            deployedReleases = JSON.parse(currentHelmReleases.stdout);
+        }
+        catch (e) { /* ignore */ }
+    }
+    const lakeCharts = ["ingext-lake-config", "ingext-merge-pool", "ingext-search-pool", "ingext-s3-lake", "ingext-lake"];
+    const allDeployed = lakeCharts.every(c => deployedReleases.some((r) => r.name === c && r.status === "deployed"));
+    if (allDeployed) {
+        // Verify pods are ready
+        const podsCheck = await kubectl(["get", "pods", "-n", namespace, "-l", "app.kubernetes.io/part-of=ingext-lake", "-o", "json"], { AWS_PROFILE: profile, AWS_REGION: region });
+        let allReady = false;
+        if (podsCheck.ok) {
+            try {
+                const pods = JSON.parse(podsCheck.stdout).items || [];
+                allReady = pods.length > 0 && pods.every((p) => p.status.phase === "Running" && p.status?.conditions?.some((c) => c.type === "Ready" && c.status === "True"));
+            }
+            catch (e) { /* ignore */ }
+        }
+        if (allReady) {
+            if (verbose)
+                process.stderr.write(`\n✓ Phase 6 Application Datalake is already complete and healthy. Skipping...\n`);
+            evidence.pods.ready = true;
+            lakeCharts.forEach(c => {
+                const found = deployedReleases.find((r) => r.name === c);
+                evidence.helm.releases.push({
+                    name: c,
+                    status: "deployed",
+                    revision: found.revision || 0,
+                    chart: found.chart || c,
+                });
+            });
+            return { ok: true, evidence, blockers };
         }
     }
     // Step 1: Install ingext-lake-config
@@ -514,6 +522,11 @@ export async function runPhase6Datalake(env, options = {}) {
     }
     // Step 4: Install ingext-lake
     const startTime4 = Date.now();
+    // Check if locked
+    const lakeLocked = await isHelmLocked("ingext-lake", namespace, { AWS_PROFILE: profile, AWS_REGION: region });
+    if (lakeLocked) {
+        await waitForHelmReady("ingext-lake", namespace, { AWS_PROFILE: profile, AWS_REGION: region });
+    }
     const lakeResult = await helm([
         "upgrade", "--install", "ingext-lake",
         "oci://public.ecr.aws/ingext/ingext-lake",

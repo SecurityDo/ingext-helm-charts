@@ -5,6 +5,8 @@ import { runStatus } from "../src/status.js";
 import { runCleanup } from "../src/cleanup.js";
 import { setExecMode } from "../src/tools/shell.js";
 import { readEnvFile, discoverEnvFiles } from "../src/tools/file.js";
+import { getALBHostname, testALBReadiness, testDNSResolution } from "../src/tools/alb.js";
+import { findHostedZoneForDomain } from "../src/tools/route53.js";
 
 function parseArgs(argv: string[]) {
   const out: Record<string, any> = {};
@@ -21,7 +23,7 @@ function parseArgs(argv: string[]) {
 const args = parseArgs(process.argv.slice(2));
 
 // Check for action/command
-const action = args["action"] || "preflight"; // preflight, install, status, cleanup
+const action = args["action"] || "preflight"; // preflight, install, status, cleanup, url
 
 // Helper to get value from CLI args, then env file, then undefined
 function getValue(cliKey: string, envKey: string, envVars: Record<string, string>): string | undefined {
@@ -40,7 +42,7 @@ let envFilePath: string | undefined;
 if (namespace) {
   // Namespace provided: use namespace-scoped env file
   envFilePath = args["output-env"] || `./lakehouse_${namespace}.env`;
-  const envFile = await readEnvFile(envFilePath);
+  const envFile = await readEnvFile(envFilePath!);
   if (envFile.ok && envFile.env) {
     envVars = envFile.env;
     // If namespace wasn't in env file, use the one from CLI
@@ -58,7 +60,7 @@ if (namespace) {
     // Exactly one env file: use it automatically
     namespace = discoveredNamespaces[0];
     envFilePath = args["output-env"] || `./lakehouse_${namespace}.env`;
-    const envFile = await readEnvFile(envFilePath);
+    const envFile = await readEnvFile(envFilePath!);
     if (envFile.ok && envFile.env) {
       envVars = envFile.env;
       namespace = envFile.env.NAMESPACE || namespace;
@@ -74,7 +76,7 @@ if (namespace) {
       // For install/status, try "ingext" first, then first discovered
       namespace = discoveredNamespaces.includes("ingext") ? "ingext" : discoveredNamespaces[0];
       envFilePath = args["output-env"] || `./lakehouse_${namespace}.env`;
-      const envFile = await readEnvFile(envFilePath);
+      const envFile = await readEnvFile(envFilePath!);
       if (envFile.ok && envFile.env) {
         envVars = envFile.env;
         namespace = envFile.env.NAMESPACE || namespace;
@@ -362,6 +364,204 @@ if (action === "status") {
   } else {
     process.exit(3); // partial completion
   }
+} else if (action === "url") {
+  // URL action - get and display ALB URL
+  if (!namespace) {
+    const discovered = discoverEnvFiles(".");
+    console.error("❌ Error: Namespace is required for url action.");
+    if (discovered.length > 0) {
+      console.error(`   Available namespaces: ${discovered.join(", ")}`);
+      console.error(`   Specify --namespace <namespace> to use one of these.`);
+    } else {
+      console.error(`   No env files found. Run preflight first to create one.`);
+    }
+    process.exit(1);
+  }
+  
+  // Load env file
+  const urlEnvFilePath = envFilePath || args["output-env"] || `./lakehouse_${namespace}.env`;
+  const envFileForUrl = await readEnvFile(urlEnvFilePath);
+  
+  if (!envFileForUrl.ok || !envFileForUrl.env) {
+    console.error(`❌ Error: No environment file found for namespace '${namespace}'.`);
+    console.error(`   Expected: ${urlEnvFilePath}`);
+    console.error(`   Run preflight first to generate the env file.`);
+    process.exit(1);
+  }
+  
+  const urlEnv = { ...envFileForUrl.env };
+  const profile = raw.awsProfile || urlEnv.AWS_PROFILE || "default";
+  const region = raw.awsRegion || urlEnv.AWS_REGION || "us-east-2";
+  const siteDomain = raw.siteDomain || urlEnv.SITE_DOMAIN;
+  const testReadiness = args["test"] === "true" || args["test"] === true;
+  const waitForProvisioning = args["wait"] === "true" || args["wait"] === true;
+  
+  // Get ALB hostname
+  const hostnameResult = await getALBHostname(namespace, profile, region);
+  
+  if (!hostnameResult.hostname) {
+    console.error("❌ ALB hostname not yet assigned.");
+    console.error("");
+    console.error("   The ALB is still being provisioned by AWS.");
+    console.error("   This typically takes 2-5 minutes after Phase 7 (Ingress) completes.");
+    console.error("");
+    console.error("💡 Tips:");
+    console.error("   - Wait a few minutes and try again: lakehouse url");
+    console.error("   - Check ingress status: kubectl get ingress -n " + namespace);
+    console.error("   - Use --wait to wait for provisioning: lakehouse url --wait");
+    process.exit(1);
+  }
+  
+  const hostname = hostnameResult.hostname;
+  
+  // Test readiness if requested
+  let readinessResult;
+  if (testReadiness || waitForProvisioning) {
+    readinessResult = await testALBReadiness(
+      namespace,
+      profile,
+      region,
+      {
+        waitForProvisioning,
+        maxWaitMinutes: 5,
+        testHttp: testReadiness,
+        testDns: false, // We'll test DNS separately for better output
+        siteDomain: siteDomain,
+        verbose: true
+      }
+    );
+  }
+  
+  // Test DNS resolution if --test is used and domain is configured
+  let dnsTestResult;
+  if (testReadiness && siteDomain) {
+    console.error("");
+    console.error("🔍 Testing DNS resolution...");
+    dnsTestResult = await testDNSResolution(siteDomain);
+    
+    // Also check Route53 record if available
+    const domainParts = siteDomain.split(".");
+    const rootDomain = domainParts.slice(-2).join(".");
+    const zoneResult = await findHostedZoneForDomain(rootDomain);
+    
+    if (zoneResult.ok && zoneResult.zoneId) {
+      // Check if DNS record exists in Route53
+      const { run } = await import("../src/tools/shell.js");
+      const listRecordsResult = await run("aws", [
+        "route53",
+        "list-resource-record-sets",
+        "--hosted-zone-id",
+        zoneResult.zoneId,
+        "--query",
+        `ResourceRecordSets[?Name=='${siteDomain}.'] || ResourceRecordSets[?Name=='${siteDomain}']`,
+        "--output",
+        "json"
+      ], { AWS_PROFILE: profile, AWS_REGION: region });
+      
+      if (listRecordsResult.ok) {
+        try {
+          const records = JSON.parse(listRecordsResult.stdout);
+          if (records && records.length > 0) {
+            const record = records[0];
+            if (record.AliasTarget) {
+              const aliasTarget = record.AliasTarget.DNSName.replace(/\.$/, ""); // Remove trailing dot
+              if (aliasTarget === hostname) {
+                console.error(`✓ Route53 DNS record points to correct ALB`);
+              } else {
+                console.error(`⚠️  Route53 DNS record points to different ALB:`);
+                console.error(`   Current: ${aliasTarget}`);
+                console.error(`   Expected: ${hostname}`);
+                console.error(`   💡 Update DNS: npx tsx scripts/configure-dns.ts`);
+              }
+            }
+          } else {
+            console.error(`⚠️  No Route53 DNS record found for ${siteDomain}`);
+            console.error(`   💡 Create DNS record: npx tsx scripts/configure-dns.ts`);
+          }
+        } catch (e) {
+          // Ignore parse errors
+        }
+      }
+    }
+  }
+  
+  // Display results
+  console.error("");
+  console.error("=".repeat(60));
+  console.error("🌐 Lakehouse URL");
+  console.error("=".repeat(60));
+  console.error("");
+  
+  if (siteDomain) {
+    console.log(`https://${siteDomain}`);
+    console.error("");
+    console.error(`   Domain: ${siteDomain}`);
+  } else {
+    console.log(`https://${hostname}`);
+    console.error("");
+    console.error(`   ALB Hostname: ${hostname}`);
+    console.error("");
+    console.error("💡 Tip: Configure DNS to use your domain:");
+    console.error(`   npx tsx scripts/configure-dns.ts`);
+  }
+  
+  console.error(`   ALB Hostname: ${hostname}`);
+  
+  if (readinessResult) {
+    console.error("");
+    if (readinessResult.ready) {
+      console.error("✅ ALB is ready and working");
+      if (readinessResult.httpTest?.statusCode) {
+        console.error(`   HTTP Test: ${readinessResult.httpTest.statusCode}`);
+      }
+    } else {
+      console.error(`⚠️  ${readinessResult.message}`);
+    }
+  }
+  
+  // Display DNS test results
+  if (dnsTestResult) {
+    console.error("");
+    if (dnsTestResult.resolves) {
+      console.error("✅ DNS resolves correctly");
+      if (dnsTestResult.resolvedIp) {
+        console.error(`   Resolves to: ${dnsTestResult.resolvedIp}`);
+      }
+    } else {
+      console.error("❌ DNS does not resolve");
+      if (dnsTestResult.error) {
+        console.error(`   Error: ${dnsTestResult.error}`);
+      }
+      console.error("");
+      console.error("💡 Solutions:");
+      console.error("   1. Create/update DNS record: npx tsx scripts/configure-dns.ts");
+      console.error("   2. Wait 1-5 minutes for DNS propagation");
+      console.error("   3. Clear local DNS cache:");
+      console.error("      macOS: sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder");
+    }
+  } else if (testReadiness && !siteDomain) {
+    console.error("");
+    console.error("💡 Tip: Configure a domain to test DNS resolution");
+  } else if (!testReadiness) {
+    console.error("");
+    console.error("💡 Tip: Use --test to verify ALB connectivity and DNS:");
+    console.error(`   lakehouse url --test`);
+  }
+  
+  console.error("");
+  console.error("=".repeat(60));
+  
+  // Output URL to stdout for scripting (only if not in test mode)
+  if (!testReadiness && !readinessResult) {
+    // Just output the URL
+    if (siteDomain) {
+      console.log(`https://${siteDomain}`);
+    } else {
+      console.log(`https://${hostname}`);
+    }
+  }
+  
+  process.exit(0);
 } else {
   // Default: preflight + install flow
   const input = PreflightInputSchema.parse(raw);

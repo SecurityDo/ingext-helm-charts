@@ -1,6 +1,11 @@
-import { kubectl } from "../../tools/kubectl.js";
-import { helm } from "../../tools/helm.js";
+import { kubectl, waitForPodsReady } from "../../tools/kubectl.js";
+import { helm, upgradeInstall } from "../../tools/helm.js";
 import { findHostedZoneForDomain } from "../../tools/route53.js";
+import { aws, getVpcIdFromCluster } from "../../tools/aws.js";
+import { createPolicy, findPolicyByName } from "../../tools/iam.js";
+import { createPodIdentityAssociation } from "../../tools/eksctl.js";
+import { getExecMode, run } from "../../tools/shell.js";
+import { testALBReadiness } from "../../tools/alb.js";
 
 export type Phase7Evidence = {
   gates: {
@@ -42,6 +47,8 @@ export type Phase7Evidence = {
 export type Phase7Options = {
   force?: boolean;
   verbose?: boolean;
+  waitForALB?: boolean; // Wait for ALB to be fully provisioned and test connectivity
+  testALBConnectivity?: boolean; // Test HTTP connectivity to ALB
 };
 
 export async function runPhase7Ingress(
@@ -89,35 +96,15 @@ export async function runPhase7Ingress(
   // Gate Checks (Non-blocking, evidence only)
   // ============================================================
 
-  // Gate 1: Check Phase 6 pods are ready
-  const phase6PodsCheck = await kubectl(
-    ["get", "pods", "-n", namespace, "-o", "json"],
-    { AWS_PROFILE: profile, AWS_REGION: region }
-  );
+  // Gate 1: Check Phase 6 pods are ready (graceful wait)
+  if (verbose) console.error(`   Checking Phase 6 (Datalake) pods readiness...`);
+  const phase6Wait = await waitForPodsReady(namespace, profile, region, {
+    maxWaitMinutes: 5,
+    verbose,
+    description: "Phase 6 (Datalake) pods"
+  });
 
-  if (phase6PodsCheck.ok) {
-    try {
-      const podsData = JSON.parse(phase6PodsCheck.stdout);
-      const pods = podsData.items || [];
-      const activePods = pods.filter((p: any) => {
-        const phase = p.status?.phase;
-        if (phase === "Succeeded" || phase === "Failed") return false;
-        const ownerRefs = p.metadata?.ownerReferences || [];
-        const isCronJobPod = ownerRefs.some((ref: any) => ref.kind === "Job" && p.metadata.name.includes("cronjob"));
-        if (isCronJobPod) return false;
-        return true;
-      });
-
-      const allReady = activePods.every((p: any) => {
-        const readyCondition = p.status?.conditions?.find((c: any) => c.type === "Ready");
-        return readyCondition && readyCondition.status === "True";
-      });
-
-      evidence.gates.phase6Healthy = allReady && activePods.length > 0;
-    } catch (e) {
-      evidence.gates.phase6Healthy = false;
-    }
-  }
+  evidence.gates.phase6Healthy = phase6Wait.ok;
 
   // Gate 2: Check certArn is known
   evidence.gates.certArnKnown = !!certArn && certArn.length > 0;
@@ -126,10 +113,10 @@ export async function runPhase7Ingress(
   evidence.gates.siteDomainKnown = !!siteDomain && siteDomain.length > 0;
 
   // Validate gates
-  if (!evidence.gates.phase6Healthy) {
+  if (!phase6Wait.ok) {
     blockers.push({
       code: "PHASE6_NOT_READY",
-      message: "Phase 6 (Datalake) pods are not all ready. Ensure Phase 6 completes before Phase 7.",
+      message: "Phase 6 (Datalake) pods are not all ready after waiting. Ensure Phase 6 completes before Phase 7.",
       remediation: "Check pod status: kubectl get pods -n " + namespace,
     });
   }
@@ -189,21 +176,114 @@ export async function runPhase7Ingress(
       }
     }
   } else {
-    // ALB Controller not installed
+    // ALB Controller not installed - SELF-HEAL: Install it
     if (verbose) {
-      console.error("⚠️  AWS Load Balancer Controller not found");
-      console.error("   This is typically installed during cluster setup.");
-      console.error("   Phase 7 will continue, but ALB provisioning may fail.");
+      console.error("⚠️  AWS Load Balancer Controller not found. Installing now...");
     }
+
+    const clusterName = env.CLUSTER_NAME;
     
-    blockers.push({
-      code: "ALB_CONTROLLER_MISSING",
-      message: "AWS Load Balancer Controller is not installed in kube-system namespace.",
-      remediation: "Install ALB Controller: https://docs.aws.amazon.com/eks/latest/userguide/aws-load-balancer-controller.html",
+    // 1. Create/Find IAM Policy
+    const policyName = `AWSLoadBalancerControllerIAMPolicy_${clusterName}`;
+    const policyCheck = await findPolicyByName(policyName, profile, region);
+    let policyArn = policyCheck.arn;
+
+    if (!policyCheck.found) {
+      if (verbose) console.error(`   Creating IAM policy: ${policyName}...`);
+      
+      // Fetch policy document from official AWS docs using curl
+      const policyUrl = "https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/main/docs/install/iam_policy.json";
+      const curlResult = await run("curl", ["-sL", policyUrl]);
+      
+      if (!curlResult.ok) {
+        blockers.push({
+          code: "ALB_POLICY_FETCH_FAILED",
+          message: `Failed to fetch IAM policy from ${policyUrl}: ${curlResult.stderr}`,
+          remediation: "Check internet connection or manually create policy",
+        });
+        return { ok: false, evidence, blockers };
+      }
+
+      let policyDoc;
+      try {
+        policyDoc = JSON.parse(curlResult.stdout);
+      } catch (e) {
+        blockers.push({
+          code: "ALB_POLICY_PARSE_FAILED",
+          message: `Failed to parse IAM policy JSON: ${String(e)}`,
+          remediation: "Check policy URL content",
+        });
+        return { ok: false, evidence, blockers };
+      }
+
+      const policyResult = await createPolicy(policyName, policyDoc, profile, region);
+      if (policyResult.ok) {
+        policyArn = policyResult.arn;
+      } else {
+        blockers.push({
+          code: "ALB_POLICY_CREATE_FAILED",
+          message: `Failed to create IAM policy for ALB controller: ${policyResult.error}`,
+          remediation: "Check IAM permissions for creating policies",
+        });
+        return { ok: false, evidence, blockers };
+      }
+    }
+
+    // 2. Create Pod Identity Association
+    if (verbose) console.error("   Creating Pod Identity Association for ALB controller...");
+    const roleName = `AWSLoadBalancerControllerRole_${clusterName}`;
+    await createPodIdentityAssociation({
+      cluster: clusterName,
+      namespace: "kube-system",
+      serviceAccountName: "aws-load-balancer-controller",
+      roleName: roleName,
+      permissionPolicyArns: policyArn!,
+      region,
+      profile,
     });
-    
-    // Don't fail hard - operator may have it installed differently
-    if (!options.force) {
+
+    // 3. Add EKS Helm Repo
+    if (verbose) console.error("   Adding EKS Helm repository...");
+    await helm(["repo", "add", "eks", "https://aws.github.io/eks-charts"], { AWS_PROFILE: profile, AWS_REGION: region });
+    await helm(["repo", "update"], { AWS_PROFILE: profile, AWS_REGION: region });
+
+    // 4. Get VPC ID
+    const vpcId = await getVpcIdFromCluster(clusterName, profile, region);
+    if (!vpcId) {
+      blockers.push({
+        code: "VPC_ID_NOT_FOUND",
+        message: `Could not determine VPC ID for cluster ${clusterName}`,
+        remediation: "Check EKS cluster status and AWS permissions",
+      });
+      return { ok: false, evidence, blockers };
+    }
+
+    // 5. Install Helm Chart
+    if (verbose) console.error("   Installing aws-load-balancer-controller Helm chart...");
+    const installResult = await helm(
+      [
+        "upgrade", "--install", "aws-load-balancer-controller", "eks/aws-load-balancer-controller",
+        "-n", "kube-system",
+        "--set", `clusterName=${clusterName}`,
+        "--set", `region=${region}`,
+        "--set", `vpcId=${vpcId}`,
+        "--set", "serviceAccount.create=true",
+        "--set", "serviceAccount.name=aws-load-balancer-controller",
+        "--wait", "--timeout", "5m"
+      ],
+      { AWS_PROFILE: profile, AWS_REGION: region }
+    );
+
+    if (installResult.ok) {
+      evidence.albController.installed = true;
+      evidence.albController.ready = true;
+      if (verbose) console.error("✓ AWS Load Balancer Controller installed successfully");
+    } else {
+      blockers.push({
+        code: "ALB_CONTROLLER_INSTALL_FAILED",
+        message: `Failed to install ALB controller: ${installResult.stderr}`,
+        remediation: "Check Helm logs and EKS permissions",
+      });
       return { ok: false, evidence, blockers };
     }
   }
@@ -216,6 +296,9 @@ export async function runPhase7Ingress(
     console.error("\n⏳ Step 2: Installing Ingress Helm chart...");
   }
 
+  const clusterName = env.CLUSTER_NAME;
+  const lbName = `albingext${clusterName}ingress`.toLowerCase().replace(/[^a-z0-9]/g, "");
+
   const startTime = Date.now();
   const ingressResult = await helm(
     [
@@ -224,6 +307,7 @@ export async function runPhase7Ingress(
       "--namespace", namespace,
       "--set", `siteDomain=${siteDomain}`,
       "--set", `certArn=${certArn}`,
+      "--set", `loadBalancerName=${lbName}`,
       // No --wait flag (non-blocking)
     ],
     { AWS_PROFILE: profile, AWS_REGION: region }
@@ -264,7 +348,7 @@ export async function runPhase7Ingress(
   }
 
   // ============================================================
-  // Step 3: Detect ALB Provisioning (Non-Blocking)
+  // Step 3: Detect ALB Provisioning and Test Readiness
   // ============================================================
 
   if (verbose) {
@@ -327,6 +411,54 @@ export async function runPhase7Ingress(
   } else {
     if (verbose) {
       console.error("⚠️  Could not query ingress objects");
+    }
+  }
+
+  // ============================================================
+  // Step 3.5: Test ALB Readiness (Optional)
+  // ============================================================
+
+  if (options.waitForALB || options.testALBConnectivity) {
+    if (verbose) {
+      console.error("\n⏳ Step 3.5: Testing ALB readiness...");
+    }
+
+    const albTestResult = await testALBReadiness(
+      namespace,
+      profile,
+      region,
+      {
+        waitForProvisioning: options.waitForALB ?? false,
+        maxWaitMinutes: 5,
+        testHttp: options.testALBConnectivity ?? true,
+        testDns: false, // DNS test is separate
+        siteDomain: siteDomain,
+        verbose: verbose
+      }
+    );
+
+    if (albTestResult.ready) {
+      if (verbose) {
+        console.error(`✓ ${albTestResult.message}`);
+        if (albTestResult.httpTest?.statusCode) {
+          console.error(`   HTTP test: ${albTestResult.httpTest.statusCode}`);
+        }
+      }
+      // Update evidence with confirmed ALB status
+      if (albTestResult.hostname) {
+        evidence.ingress.albDnsName = albTestResult.hostname;
+      }
+      evidence.ingress.albStatus = albTestResult.albState === "active" ? "ACTIVE" : "PROVISIONING";
+    } else {
+      if (verbose) {
+        console.error(`⚠️  ${albTestResult.message}`);
+      }
+      // Don't block installation, but note the status
+      if (albTestResult.albState === "provisioning") {
+        evidence.ingress.albStatus = "PROVISIONING";
+      } else if (albTestResult.albState === "failed") {
+        evidence.ingress.albStatus = "NOT_READY";
+      }
     }
   }
 

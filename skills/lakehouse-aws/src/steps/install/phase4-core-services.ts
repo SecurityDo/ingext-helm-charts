@@ -1,7 +1,7 @@
 import { checkPlatformHealth } from "../../tools/platform.js";
 import { checkKarpenterInstalled, checkKarpenterReady } from "../../tools/karpenter.js";
 import { kubectl, getPodEvents } from "../../tools/kubectl.js";
-import { helm, upgradeInstall, waitForHelmReady } from "../../tools/helm.js";
+import { helm, upgradeInstall, waitForHelmReady, isHelmLocked } from "../../tools/helm.js";
 
 export type Phase4Evidence = {
   platform: {
@@ -60,6 +60,7 @@ export async function runPhase4CoreServices(
   evidence: Phase4Evidence;
   blockers: Array<{ code: string; message: string }>;
 }> {
+  const verbose = options?.verbose !== false;
   const blockers: Array<{ code: string; message: string }> = [];
   
   const region = env.AWS_REGION;
@@ -96,6 +97,45 @@ export async function runPhase4CoreServices(
   // STEP 0: Platform Health Gate
   const platformHealth = await checkPlatformHealth(profile, region);
   evidence.platform.healthy = platformHealth.healthy;
+
+  // Check StorageClass health - Core services depend on gp3
+  if (verbose) console.error(`   Checking StorageClass health...`);
+  const scCheck = await kubectl(
+    ["get", "sc", "gp3", "-o", "json"],
+    { AWS_PROFILE: profile, AWS_REGION: region }
+  );
+  
+  if (!scCheck.ok) {
+    if (verbose) console.error(`⚠️  StorageClass 'gp3' not found. Stateful services may fail to start.`);
+    // Don't block yet, maybe it's being installed
+  } else {
+    // Verify provisioner health by checking EBS CSI pods
+    const ebsPods = await kubectl(
+      ["get", "pods", "-n", "kube-system", "-l", "app.kubernetes.io/name=aws-ebs-csi-driver", "-o", "json"],
+      { AWS_PROFILE: profile, AWS_REGION: region }
+    );
+    
+    if (ebsPods.ok) {
+      try {
+        const podsData = JSON.parse(ebsPods.stdout);
+        const pods = podsData.items || [];
+        const crashing = pods.filter((p: any) => 
+          p.status?.containerStatuses?.some((s: any) => s.state?.waiting?.reason === "CrashLoopBackOff")
+        );
+        
+        if (crashing.length > 0 && !options?.force) {
+          const errorMsg = `EBS CSI driver is unhealthy (CrashLoopBackOff). Core services cannot mount storage.\n\n` +
+                          `To fix: Check IAM role permissions and Pod Identity association for the EBS CSI driver.`;
+          if (verbose) console.error(`❌ ${errorMsg}`);
+          blockers.push({
+            code: "STORAGE_PROVISIONER_UNHEALTHY",
+            message: errorMsg,
+          });
+          return { ok: false, evidence, blockers };
+        }
+      } catch (e) { /* ignore */ }
+    }
+  }
 
   // Check Karpenter status if installed
   const karpenterCheck = await checkKarpenterInstalled(profile, region);
@@ -207,7 +247,7 @@ export async function runPhase4CoreServices(
   if (serviceAccountChartResult.ok) {
     // Try to get release info
     const helmCheck = await helm(
-      ["list", "-n", namespace, "-o", "json"],
+      ["list", "-a", "-n", namespace, "-o", "json"],
       { AWS_PROFILE: profile, AWS_REGION: region }
     );
     if (helmCheck.ok) {
@@ -232,6 +272,13 @@ export async function runPhase4CoreServices(
   // STEP 3.5: Install ingext-manager-role Chart (RBAC permissions for service account)
   // This must be installed before Phase 5 pods start, as they need to read secrets and configmaps
   const managerRoleStartTime = Date.now();
+  
+  // Check if locked
+  const managerRoleLocked = await isHelmLocked("ingext-manager-role", namespace, { AWS_PROFILE: profile, AWS_REGION: region });
+  if (managerRoleLocked) {
+    await waitForHelmReady("ingext-manager-role", namespace, { AWS_PROFILE: profile, AWS_REGION: region });
+  }
+
   const managerRoleResult = await helm(
     [
       "upgrade", "--install", "ingext-manager-role",
@@ -268,7 +315,60 @@ export async function runPhase4CoreServices(
     { release: 'etcd-single-cronjob', chart: 'oci://public.ecr.aws/ingext/etcd-single-cronjob' },
   ];
 
+  // Get current Helm releases first to see if we can skip
+  const currentHelmReleases = await helm(
+    ["list", "-a", "-n", namespace, "-o", "json"],
+    { AWS_PROFILE: profile, AWS_REGION: region }
+  );
+  let deployedReleases: any[] = [];
+  if (currentHelmReleases.ok) {
+    try {
+      deployedReleases = JSON.parse(currentHelmReleases.stdout);
+    } catch (e) { /* ignore */ }
+  }
+
   for (const { release, chart } of charts) {
+    // Check if release is locked by another operation
+    const isLocked = await isHelmLocked(release, namespace, { AWS_PROFILE: profile, AWS_REGION: region });
+    if (isLocked) {
+      if (verbose) console.error(`⚠️  Release "${release}" has another operation in progress. Waiting...`);
+      const ready = await waitForHelmReady(release, namespace, { AWS_PROFILE: profile, AWS_REGION: region });
+      if (!ready.ok) {
+        blockers.push({
+          code: `HELM_LOCKED_${release.toUpperCase().replace(/-/g, '_')}`,
+          message: `Helm release "${release}" is locked by another operation and timed out waiting. Try: helm rollback ${release} -n ${namespace}`,
+        });
+        continue;
+      }
+      
+      // Refresh currentHelmReleases after waiting
+      const refreshedReleases = await helm(
+        ["list", "-a", "-n", namespace, "-o", "json"],
+        { AWS_PROFILE: profile, AWS_REGION: region }
+      );
+      if (refreshedReleases.ok) {
+        try {
+          deployedReleases = JSON.parse(refreshedReleases.stdout);
+        } catch (e) { /* ignore */ }
+      }
+    }
+
+    const isDeployed = deployedReleases.some((r: any) => r.name === release && r.status === "deployed");
+    
+    if (isDeployed) {
+      if (verbose) console.error(`✓ Release "${release}" is already deployed. Skipping upgrade.`);
+      // Add to evidence
+      const found = deployedReleases.find((r: any) => r.name === release);
+      evidence.helm.releases.push({
+        name: release,
+        status: "deployed",
+        revision: found.revision || 0,
+        chart: chart,
+        version: found.app_version || undefined,
+      });
+      continue;
+    }
+
     const startTime = Date.now();
     
     // Use helm directly to add --wait --timeout flags
@@ -286,7 +386,7 @@ export async function runPhase4CoreServices(
 
     // Get release info
     const helmCheck = await helm(
-      ["list", "-n", namespace, "-o", "json"],
+      ["list", "-a", "-n", namespace, "-o", "json"],
       { AWS_PROFILE: profile, AWS_REGION: region }
     );
 
@@ -318,13 +418,14 @@ export async function runPhase4CoreServices(
         code: `HELM_INSTALL_FAILED_${release.toUpperCase().replace(/-/g, '_')}`,
         message: `Failed to install ${release}: ${releaseInfo.error}`,
       });
+      evidence.helm.releases.push(releaseInfo);
+      break; // Stop installing subsequent charts if one fails
     }
 
     evidence.helm.releases.push(releaseInfo);
   }
 
   // STEP 5: Active pod readiness polling (NO SILENT 10-MINUTE WAITS!)
-  const verbose = options?.verbose ?? true;
   if (verbose) console.error(`\n⏳ Waiting for all pods to be Ready (checking every 30s, max 10 minutes)...`);
   
   const maxWaitSeconds = 600;
@@ -378,11 +479,31 @@ export async function runPhase4CoreServices(
             evidence.pods.readyCount++;
           } else {
             const phase = pod.status.phase || "Unknown";
-            const reason = pod.status.containerStatuses?.[0]?.state?.waiting?.reason ||
+            let reason = pod.status.containerStatuses?.[0]?.state?.waiting?.reason ||
                          pod.status.containerStatuses?.[0]?.state?.terminated?.reason ||
                          pod.status.reason ||
                          undefined;
             
+            // Check for PVC binding issues if pod is Pending
+            if (phase === "Pending") {
+              const podName = pod.metadata.name;
+              const eventsRes = await kubectl(
+                ["get", "events", "-n", namespace, "--field-selector", `involvedObject.name=${podName}`, "-o", "json"],
+                { AWS_PROFILE: profile, AWS_REGION: region }
+              );
+              
+              if (eventsRes.ok) {
+                try {
+                  const eventsData = JSON.parse(eventsRes.stdout);
+                  const events = eventsData.items || [];
+                  const pvcEvent = events.find((e: any) => e.message?.includes("unbound immediate PersistentVolumeClaims"));
+                  if (pvcEvent) {
+                    reason = "StorageWait";
+                  }
+                } catch (e) { /* ignore */ }
+              }
+            }
+
             evidence.pods.notReady.push({
               name: pod.metadata.name,
               status: phase,

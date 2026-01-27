@@ -46,5 +46,38 @@ if [[ -n "$ENV_FILE" ]]; then
   DOCKER_ARGS+=(--env-file "$ENV_FILE")
 fi
 
-# Run the command
-docker "${DOCKER_ARGS[@]}" "$IMAGE_NAME" "$@"
+# If eksctl command is being run, ensure it's installed first
+if [[ "$1" == "eksctl" ]]; then
+  # Wrap the command to install eksctl if missing, then run it
+  docker "${DOCKER_ARGS[@]}" "$IMAGE_NAME" bash -c "
+    # Check if eksctl exists, install if missing
+    if ! command -v eksctl >/dev/null 2>&1; then
+      echo '⏳ Installing eksctl in Docker container...' >&2
+      ARCH=\$(uname -m | sed 's/x86_64/amd64/')
+      PLATFORM=\$(uname -s | tr '[:upper:]' '[:lower:]')
+      
+      # Try latest release first, fallback to specific version
+      if ! curl -sLf \"https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_\${PLATFORM}_\${ARCH}.tar.gz\" -o /tmp/eksctl.tar.gz; then
+        curl -sLf \"https://github.com/weaveworks/eksctl/releases/download/v0.177.0/eksctl_\${PLATFORM}_\${ARCH}.tar.gz\" -o /tmp/eksctl.tar.gz || {
+          echo '❌ Failed to download eksctl' >&2
+          exit 1
+        }
+      fi
+      
+      tar -xzf /tmp/eksctl.tar.gz -C /tmp 2>/dev/null || {
+        echo '❌ Failed to extract eksctl' >&2
+        exit 1
+      }
+      mv /tmp/eksctl /usr/local/bin/eksctl 2>/dev/null || cp /tmp/eksctl /usr/local/bin/eksctl
+      chmod +x /usr/local/bin/eksctl
+      rm -f /tmp/eksctl.tar.gz
+      echo '✓ eksctl installed' >&2
+    fi
+    
+    # Run the actual eksctl command
+    exec eksctl \"\$@\"
+  " -- "${@:2}"
+else
+  # Run the command normally for non-eksctl commands
+  docker "${DOCKER_ARGS[@]}" "$IMAGE_NAME" "$@"
+fi

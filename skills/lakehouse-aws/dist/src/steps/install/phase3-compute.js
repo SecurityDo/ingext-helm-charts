@@ -47,7 +47,7 @@ export async function runPhase3Compute(env, options) {
         }
         return { ok: false, evidence, blockers };
     }
-    // STEP 2: Check if Karpenter is already installed
+    // STEP 2: Check if Karpenter is already installed and healthy
     const installCheck = await checkKarpenterInstalled(profile, region);
     evidence.karpenter.existed = installCheck.exists;
     evidence.karpenter.release = {
@@ -55,6 +55,17 @@ export async function runPhase3Compute(env, options) {
         status: installCheck.status || "unknown",
         revision: installCheck.revision || 0,
     };
+    if (installCheck.installed) {
+        const readyCheck = await checkKarpenterReady(profile, region);
+        if (readyCheck.ready) {
+            if (verbose)
+                process.stderr.write(`\n✓ Phase 3 Compute (Karpenter) is already complete and healthy. Skipping...\n`);
+            evidence.karpenter.installed = true;
+            evidence.karpenter.controllerReady = true;
+            evidence.karpenter.version = installCheck.version || "unknown";
+            return { ok: true, evidence, blockers };
+        }
+    }
     // STEP 3: Handle different installation states
     if (installCheck.needsRepair) {
         // Helm release exists but status is "failed" - attempt repair

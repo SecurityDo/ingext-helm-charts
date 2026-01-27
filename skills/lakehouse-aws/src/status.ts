@@ -6,6 +6,7 @@ import { helm } from "./tools/helm.js";
 import { findCertificatesForDomain, describeCertificate } from "./tools/acm.js";
 import { findHostedZoneForDomain } from "./tools/route53.js";
 import { getExecMode } from "./tools/shell.js";
+import { testALBReadiness } from "./tools/alb.js";
 
 export type StatusInput = {
   awsProfile: string;
@@ -23,7 +24,7 @@ export type ComponentStatus = "ready" | "deployed" | "degraded" | "missing" | "u
 export type ComponentPodStatus = {
   name: string;
   displayName: string;
-  status: "Running" | "Pending" | "CrashLoopBackOff" | "NOT DEPLOYED" | "Starting";
+  status: "Running" | "Pending" | "CrashLoopBackOff" | "NOT DEPLOYED" | "Starting" | "Failed" | "Succeeded" | "Terminating" | "ImagePullBackOff" | "ErrImagePull" | "CreateContainerConfigError" | "Unknown" | string;
   ready?: boolean;
 };
 
@@ -144,6 +145,7 @@ export type StatusResult = {
 };
 
 // Helper function to check pod status by label (similar to bash script)
+// Checks ALL pods for the component and returns the worst status
 async function checkPodStatusByLabel(
   appName: string,
   displayName: string,
@@ -168,41 +170,100 @@ async function checkPodStatusByLabel(
         const data = JSON.parse(podCheck.stdout);
         const pods = data.items || [];
         if (pods.length > 0) {
-          const pod = pods[0];
-          const phase = pod.status?.phase || "Unknown";
-          const containerStatuses = pod.status?.containerStatuses || [];
-          const ready = containerStatuses.length > 0 && containerStatuses.every((c: any) => c.ready);
-
-          if (phase === "Running") {
-            if (!ready) {
-              // Match bash script: "Starting (0/1)" when Running but not ready
-              return {
+          // Check ALL pods, not just the first one
+          // Priority order: Failed/CrashLoopBackOff > Pending/Starting > Running > Succeeded
+          let worstStatus: ComponentPodStatus | null = null;
+          let allReady = true;
+          
+          for (const pod of pods) {
+            const phase = pod.status?.phase || "Unknown";
+            const containerStatuses = pod.status?.containerStatuses || [];
+            const ready = containerStatuses.length > 0 && containerStatuses.every((c: any) => c.ready);
+            
+            if (!ready) allReady = false;
+            
+            let podStatus: ComponentPodStatus;
+            
+            if (phase === "Running") {
+              if (!ready) {
+                podStatus = {
+                  name: appName,
+                  displayName,
+                  status: "Starting",
+                  ready: false,
+                };
+              } else {
+                podStatus = {
+                  name: appName,
+                  displayName,
+                  status: "Running",
+                  ready: true,
+                };
+              }
+            } else if (phase === "Pending") {
+              podStatus = {
                 name: appName,
                 displayName,
-                status: "Starting",
+                status: "Pending",
+                ready: false,
+              };
+            } else if (phase === "CrashLoopBackOff") {
+              podStatus = {
+                name: appName,
+                displayName,
+                status: "CrashLoopBackOff",
+                ready: false,
+              };
+            } else if (phase === "Failed") {
+              podStatus = {
+                name: appName,
+                displayName,
+                status: "Failed",
+                ready: false,
+              };
+            } else if (phase === "Succeeded") {
+              podStatus = {
+                name: appName,
+                displayName,
+                status: "Succeeded",
+                ready: true,
+              };
+            } else if (phase === "Terminating") {
+              podStatus = {
+                name: appName,
+                displayName,
+                status: "Terminating",
+                ready: false,
+              };
+            } else {
+              // Handle other phases (Unknown, ImagePullBackOff, etc.)
+              const waitingReason = containerStatuses[0]?.state?.waiting?.reason;
+              const terminatedReason = containerStatuses[0]?.state?.terminated?.reason;
+              const statusReason = waitingReason || terminatedReason || phase;
+              
+              podStatus = {
+                name: appName,
+                displayName,
+                status: statusReason || "Unknown",
                 ready: false,
               };
             }
-            return {
-              name: appName,
-              displayName,
-              status: "Running",
-              ready: true,
-            };
-          } else if (phase === "Pending") {
-            return {
-              name: appName,
-              displayName,
-              status: "Pending",
-              ready: false,
-            };
-          } else if (phase === "CrashLoopBackOff") {
-            return {
-              name: appName,
-              displayName,
-              status: "CrashLoopBackOff",
-              ready: false,
-            };
+            
+            // Determine worst status (error > warning > success)
+            if (!worstStatus) {
+              worstStatus = podStatus;
+            } else {
+              const currentPriority = getStatusPriority(worstStatus.status);
+              const newPriority = getStatusPriority(podStatus.status);
+              if (newPriority > currentPriority) {
+                worstStatus = podStatus;
+              }
+            }
+          }
+          
+          // If we found pods, return the worst status
+          if (worstStatus) {
+            return worstStatus;
           }
         }
       } catch (e) {
@@ -218,6 +279,25 @@ async function checkPodStatusByLabel(
     status: "NOT DEPLOYED",
     ready: false,
   };
+}
+
+// Helper to prioritize statuses (higher number = worse/more important to show)
+function getStatusPriority(status: string): number {
+  // Error states (highest priority)
+  if (status === "CrashLoopBackOff" || status === "Failed" || status === "ImagePullBackOff" || 
+      status === "ErrImagePull" || status === "CreateContainerConfigError") {
+    return 10;
+  }
+  // Warning states
+  if (status === "Pending" || status === "Starting" || status === "Terminating") {
+    return 5;
+  }
+  // Success states (lowest priority)
+  if (status === "Running" || status === "Succeeded") {
+    return 1;
+  }
+  // Unknown/other
+  return 3;
 }
 
 export async function runStatus(input: StatusInput): Promise<StatusResult> {
@@ -297,11 +377,19 @@ export async function runStatus(input: StatusInput): Promise<StatusResult> {
         // Ignore parse errors
       }
     }
-  } else if (clusterCheck.status === "CREATING" || clusterCheck.status === "UPDATING") {
-    result.cluster.status = "degraded";
+  } else if (clusterCheck.found && (clusterCheck.status === "CREATING" || clusterCheck.status === "UPDATING" || clusterCheck.status === "DELETING")) {
+    result.cluster.status = clusterCheck.status === "DELETING" ? "missing" : "degraded";
     result.cluster.details = { eksStatus: clusterCheck.status };
+    if (clusterCheck.status === "DELETING") {
+      nextSteps.push("Wait for cluster deletion to complete");
+    }
   } else {
+    // Cluster not found or error checking
     result.cluster.status = "missing";
+    if (clusterCheck.status !== "NOT_FOUND" && clusterCheck.status !== "ERROR") {
+      // Unknown status
+      result.cluster.details = { eksStatus: clusterCheck.status };
+    }
     nextSteps.push("Run Phase 1: Foundation to create EKS cluster");
   }
 
@@ -416,6 +504,11 @@ export async function runStatus(input: StatusInput): Promise<StatusResult> {
           ip: ip || undefined,
           status: (hostname || ip) ? "deployed" : "degraded",
         };
+        
+        // If ingress exists but no hostname/IP, it's provisioning
+        if (!hostname && !ip) {
+          result.networking.loadBalancer.status = "degraded"; // Will show as PROVISIONING in display
+        }
       } else {
         result.networking.loadBalancer = {
           status: "missing",
@@ -427,9 +520,28 @@ export async function runStatus(input: StatusInput): Promise<StatusResult> {
       };
     }
   } else {
-    result.networking.loadBalancer = {
-      status: "missing",
-    };
+    // Check if error is due to cluster being unreachable (DELETING)
+    const isClusterUnreachable = ingressCheck.stderr.includes("Unable to connect") || 
+                                 ingressCheck.stderr.includes("no such host") ||
+                                 ingressCheck.stderr.includes("connection refused");
+    
+    if (isClusterUnreachable) {
+      // Cluster might be DELETING - check cluster status
+      const clusterStatus = await describeCluster(input.clusterName, input.awsProfile, input.awsRegion);
+      if (clusterStatus.found && clusterStatus.status === "DELETING") {
+        result.networking.loadBalancer = {
+          status: "unknown", // Can't check - cluster is deleting
+        };
+      } else {
+        result.networking.loadBalancer = {
+          status: "missing",
+        };
+      }
+    } else {
+      result.networking.loadBalancer = {
+        status: "missing",
+      };
+    }
   }
 
   // Calculate Pod Summary (always try)
@@ -619,7 +731,7 @@ export async function runStatus(input: StatusInput): Promise<StatusResult> {
 
     // 10. Check Helm Releases
     const helmListCheck = await helm(
-      ["list", "-A", "-o", "json"],
+      ["list", "-a", "-A", "-o", "json"],
       { AWS_PROFILE: input.awsProfile, AWS_REGION: input.awsRegion }
     );
 

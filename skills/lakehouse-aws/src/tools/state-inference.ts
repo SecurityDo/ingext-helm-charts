@@ -269,7 +269,7 @@ async function getHelmReleases(
   namespace: string,
   env: Record<string, string>
 ): Promise<{ releases: string[] }> {
-  const result = await helm(["list", "-n", namespace, "-o", "json"], env);
+  const result = await helm(["list", "-a", "-n", namespace, "-o", "json"], env);
   
   if (!result.ok) {
     return { releases: [] };

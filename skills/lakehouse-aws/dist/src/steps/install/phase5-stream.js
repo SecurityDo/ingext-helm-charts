@@ -1,6 +1,6 @@
 import { checkPlatformHealth } from "../../tools/platform.js";
-import { kubectl } from "../../tools/kubectl.js";
-import { upgradeInstall, helm } from "../../tools/helm.js";
+import { kubectl, waitForPodsReady } from "../../tools/kubectl.js";
+import { upgradeInstall, helm, isHelmLocked, waitForHelmReady } from "../../tools/helm.js";
 // Crash loop analyzer: detects common crash patterns and returns actionable blockers
 async function analyzeCrashLoop(podName, namespace, env) {
     // Get logs from previous crash (most informative)
@@ -115,31 +115,59 @@ export async function runPhase5Stream(env, options = {}) {
     else {
         evidence.platform.healthy = true;
     }
-    // Check Phase 4 pods are ready
-    const phase4PodsCheck = await kubectl(["get", "pods", "-n", namespace, "-o", "json"], { AWS_PROFILE: env.AWS_PROFILE, AWS_REGION: env.AWS_REGION });
-    if (phase4PodsCheck.ok) {
-        try {
-            const podsData = JSON.parse(phase4PodsCheck.stdout);
-            const pods = podsData.items || [];
-            let readyCount = 0;
-            for (const pod of pods) {
-                const readyCondition = pod.status?.conditions?.find((c) => c.type === "Ready");
-                if (readyCondition && readyCondition.status === "True") {
-                    readyCount++;
-                }
-            }
-            evidence.platform.phase4PodsReady = readyCount > 0 && readyCount === pods.length;
-        }
-        catch (e) {
-            // Ignore parse errors
-        }
-    }
-    if (!evidence.platform.phase4PodsReady && !options.force) {
+    // Check Phase 4 pods are ready (graceful wait)
+    if (verbose)
+        console.error(`   Checking Phase 4 (Core Services) pods readiness...`);
+    const phase4Wait = await waitForPodsReady(namespace, env.AWS_PROFILE, env.AWS_REGION, {
+        maxWaitMinutes: 5,
+        verbose,
+        description: "Phase 4 (Core Services) pods"
+    });
+    evidence.platform.phase4PodsReady = phase4Wait.ok;
+    if (!phase4Wait.ok && !options.force) {
         blockers.push({
             code: "PHASE4_PODS_NOT_READY",
-            message: `Phase 4 pods in namespace '${namespace}' are not all ready. Ensure Phase 4 completes successfully before proceeding. Use --force to bypass.`,
+            message: `Phase 4 pods in namespace '${namespace}' are not all ready after waiting. Ensure Phase 4 completes successfully before proceeding. Use --force to bypass.`,
         });
         return { ok: false, evidence, blockers };
+    }
+    // Step 1: Check if already deployed and healthy (Smart Resume)
+    const currentHelmReleases = await helm(["list", "-a", "-n", namespace, "-o", "json"], { AWS_PROFILE: env.AWS_PROFILE, AWS_REGION: env.AWS_REGION });
+    let deployedReleases = [];
+    if (currentHelmReleases.ok) {
+        try {
+            deployedReleases = JSON.parse(currentHelmReleases.stdout);
+        }
+        catch (e) { /* ignore */ }
+    }
+    const streamCharts = ["ingext-community-config", "ingext-community-init", "ingext-community"];
+    const allDeployed = streamCharts.every(c => deployedReleases.some((r) => r.name === c && r.status === "deployed"));
+    if (allDeployed) {
+        // Verify pods are ready
+        const podsCheck = await kubectl(["get", "pods", "-n", namespace, "-l", "app.kubernetes.io/part-of=ingext-community", "-o", "json"], { AWS_PROFILE: env.AWS_PROFILE, AWS_REGION: env.AWS_REGION });
+        let allReady = false;
+        if (podsCheck.ok) {
+            try {
+                const pods = JSON.parse(podsCheck.stdout).items || [];
+                allReady = pods.length > 0 && pods.every((p) => p.status.phase === "Running" && p.status?.conditions?.some((c) => c.type === "Ready" && c.status === "True"));
+            }
+            catch (e) { /* ignore */ }
+        }
+        if (allReady) {
+            if (verbose)
+                process.stderr.write(`\n✓ Phase 5 Application Stream is already complete and healthy. Skipping...\n`);
+            evidence.pods.ready = true;
+            streamCharts.forEach(c => {
+                const found = deployedReleases.find((r) => r.name === c);
+                evidence.helm.releases.push({
+                    name: c,
+                    status: "deployed",
+                    revision: found.revision || 0,
+                    chart: found.chart || c,
+                });
+            });
+            return { ok: true, evidence, blockers };
+        }
     }
     // Step 1: Install ingext-community-config (with siteDomain)
     const startTime1 = Date.now();
@@ -181,6 +209,11 @@ export async function runPhase5Stream(env, options = {}) {
     }
     // Step 3: Install ingext-community (with --wait --timeout)
     const startTime3 = Date.now();
+    // Check if locked
+    const communityLocked = await isHelmLocked("ingext-community", namespace, { AWS_PROFILE: env.AWS_PROFILE, AWS_REGION: env.AWS_REGION });
+    if (communityLocked) {
+        await waitForHelmReady("ingext-community", namespace, { AWS_PROFILE: env.AWS_PROFILE, AWS_REGION: env.AWS_REGION });
+    }
     const communityResult = await helm([
         "upgrade", "--install", "ingext-community",
         "oci://public.ecr.aws/ingext/ingext-community",

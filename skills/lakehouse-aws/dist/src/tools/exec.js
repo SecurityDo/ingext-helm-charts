@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { startSpinner, stopSpinner } from "./spinner.js";
 export function execCmd(mode, cmd, args, opts) {
     return new Promise((resolve, reject) => {
         // Determine the actual command and args based on execution mode
@@ -17,7 +18,6 @@ export function execCmd(mode, cmd, args, opts) {
                 cwd: opts?.cwd ?? process.cwd(),
                 stdio: ["ignore", "pipe", "pipe"],
             };
-            console.error(`[DEBUG] Docker exec: ${fullCmd} ${fullArgs.join(" ")}`);
         }
         else {
             // Local execution
@@ -30,7 +30,6 @@ export function execCmd(mode, cmd, args, opts) {
             };
         }
         const child = spawn(fullCmd, fullArgs, execOpts);
-        console.error(`[DEBUG] Spawned PID: ${child.pid}`);
         let stdout = "";
         let stderr = "";
         // For long-running commands (like eksctl create cluster), stream output to show progress
@@ -38,6 +37,12 @@ export function execCmd(mode, cmd, args, opts) {
         const isLongRunningCommand = (cmd === "eksctl" && args[0] === "create" && args[1] === "cluster") ||
             (cmd === "eksctl" && args[0] === "delete" && args[1] === "cluster") ||
             (cmd === "helm" && args.includes("--wait"));
+        // Start spinner for short-running commands (not verbose mode)
+        const showSpinner = !isLongRunningCommand && !opts?.verbose;
+        if (showSpinner) {
+            const commandDesc = `${cmd} ${args.slice(0, 2).join(" ")}${args.length > 2 ? "..." : ""}`;
+            startSpinner(`Running ${commandDesc}`);
+        }
         if (isLongRunningCommand) {
             // Stream both stdout and stderr to console so user sees progress in real-time
             child.stdout?.on("data", (d) => {
@@ -58,8 +63,24 @@ export function execCmd(mode, cmd, args, opts) {
             child.stdout?.on("data", (d) => (stdout += d.toString()));
             child.stderr?.on("data", (d) => (stderr += d.toString()));
         }
-        child.on("error", (err) => reject(err));
+        child.on("error", (err) => {
+            if (showSpinner)
+                stopSpinner();
+            // Handle ENOENT (command not found) gracefully
+            if (err.code === "ENOENT") {
+                resolve({
+                    code: 127, // Standard "command not found" exit code
+                    stdout: "",
+                    stderr: `Command not found: ${cmd}. ${mode === "local" ? "Install it or use --exec docker to run in Docker container." : "This should not happen in Docker mode."}`,
+                });
+            }
+            else {
+                reject(err);
+            }
+        });
         child.on("close", (code) => {
+            if (showSpinner)
+                stopSpinner();
             resolve({
                 code: code ?? 1,
                 stdout: stdout.trim(),

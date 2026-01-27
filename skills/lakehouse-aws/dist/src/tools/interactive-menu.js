@@ -38,7 +38,8 @@ export async function showInteractiveMenu(env, namespace) {
     console.error("  2) Status (detailed view)");
     console.error("  3) Diagnose (AI-powered diagnostics)");
     console.error("  4) Logs (view component logs)");
-    console.error("  5) Cleanup (tear down)");
+    console.error("  5) Skills (list all skills and what they do)");
+    console.error("  6) Cleanup (tear down)");
     console.error("  q) Quit");
     console.error("");
     const choice = await prompt("Select action [1]: ");
@@ -47,7 +48,7 @@ export async function showInteractiveMenu(env, namespace) {
 /**
  * Prompt user for input using readline
  */
-async function prompt(message) {
+export async function prompt(message) {
     const rl = createInterface({
         input: process.stdin,
         output: process.stderr

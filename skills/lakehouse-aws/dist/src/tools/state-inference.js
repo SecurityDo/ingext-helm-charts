@@ -200,7 +200,7 @@ async function checkClusterExists(clusterName, awsProfile, awsRegion) {
  * Get list of helm releases in namespace
  */
 async function getHelmReleases(namespace, env) {
-    const result = await helm(["list", "-n", namespace, "-o", "json"], env);
+    const result = await helm(["list", "-a", "-n", namespace, "-o", "json"], env);
     if (!result.ok) {
         return { releases: [] };
     }

@@ -117,12 +117,17 @@ function formatStatusOutput(result) {
     const RED = "\x1b[0;31m";
     const NC = "\x1b[0m"; // No Color
     const getStatusColor = (status) => {
-        if (status === "ACTIVE" || status === "Running" || status === "EXISTS" || status === "deployed" || status === "Issued") {
+        // Success states (green)
+        if (status === "ACTIVE" || status === "Running" || status === "EXISTS" || status === "deployed" ||
+            status === "Issued" || status === "Attached" || status === "Installed") {
             return `${GREEN}${status}${NC}`;
         }
-        else if (status === "CREATING" || status === "PROVISIONING..." || status === "Pending" || status === "PENDING_VALIDATION" || status === "Starting") {
+        // Warning/In-progress states (yellow)
+        else if (status === "CREATING" || status === "PROVISIONING..." || status === "Pending" ||
+            status === "PENDING_VALIDATION" || status === "Starting" || status === "Pending Validation") {
             return `${YELLOW}${status}${NC}`;
         }
+        // Error states (red)
         else {
             return `${RED}${status}${NC}`;
         }

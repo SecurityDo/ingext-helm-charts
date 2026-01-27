@@ -280,7 +280,7 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
 
   if (input.dnsCheck) {
     const d = await digA(siteDomain);
-    if (d.ok) evidence.dnsARecord = d.ip;
+    if (d.ok) evidence.dnsARecord = (d as any).ip;
   }
 
   console.error(`⏳ Building environment configuration...`);

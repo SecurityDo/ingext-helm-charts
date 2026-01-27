@@ -101,7 +101,7 @@ export async function checkInstallationState(
     );
     state.details.namespaceExists = nsCheck.ok;
 
-    const helmList = await helm(["list", "-n", namespace, "-o", "json"], { AWS_PROFILE: profile, AWS_REGION: region });
+    const helmList = await helm(["list", "-a", "-n", namespace, "-o", "json"], { AWS_PROFILE: profile, AWS_REGION: region });
     if (helmList.ok) {
       try {
         const releases = JSON.parse(helmList.stdout);
@@ -119,7 +119,7 @@ export async function checkInstallationState(
 
   // Check Phase 5: Stream Charts
   if (state.phase4Complete) {
-    const helmList = await helm(["list", "-n", namespace, "-o", "json"], { AWS_PROFILE: profile, AWS_REGION: region });
+    const helmList = await helm(["list", "-a", "-n", namespace, "-o", "json"], { AWS_PROFILE: profile, AWS_REGION: region });
     if (helmList.ok) {
       try {
         const releases = JSON.parse(helmList.stdout);
@@ -137,7 +137,7 @@ export async function checkInstallationState(
 
   // Check Phase 6: Datalake Charts
   if (state.phase5Complete) {
-    const helmList = await helm(["list", "-n", namespace, "-o", "json"], { AWS_PROFILE: profile, AWS_REGION: region });
+    const helmList = await helm(["list", "-a", "-n", namespace, "-o", "json"], { AWS_PROFILE: profile, AWS_REGION: region });
     if (helmList.ok) {
       try {
         const releases = JSON.parse(helmList.stdout);

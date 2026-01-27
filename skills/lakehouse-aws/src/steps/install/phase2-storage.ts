@@ -1,4 +1,4 @@
-import { headBucket } from "../../tools/aws.js";
+import { headBucket, aws } from "../../tools/aws.js";
 import { createBucket } from "../../tools/s3.js";
 import { createPolicy, getAccountId } from "../../tools/iam.js";
 import { createPodIdentityAssociation } from "../../tools/eksctl.js";
@@ -69,9 +69,45 @@ export async function runPhase2Storage(env: Record<string, string>, options?: { 
     },
   };
 
-  // 1. Check if S3 bucket exists
+  // 1. Check if everything is already done (Smart Resume)
   const bucketCheck = await headBucket(bucketName, profile, region);
   evidence.s3.existed = bucketCheck.exists;
+
+  if (bucketCheck.exists) {
+    // Check if namespace and service account exist
+    const saCheckResult = await kubectl(
+      ["get", "serviceaccount", serviceAccountName, "-n", namespace, "-o", "json"],
+      { AWS_PROFILE: profile, AWS_REGION: region }
+    );
+    
+    if (saCheckResult.ok) {
+      // Check for pod identity association
+      const associationCheck = await aws(
+        ["eks", "list-pod-identity-associations", "--cluster-name", clusterName, "--region", region],
+        profile,
+        region
+      );
+      
+      let associationFound = false;
+      if (associationCheck.ok) {
+        try {
+          const data = JSON.parse(associationCheck.stdout);
+          associationFound = data.associations?.some((a: any) => 
+            a.namespace === namespace && a.serviceAccount === serviceAccountName
+          );
+        } catch (e) { /* ignore */ }
+      }
+      
+      if (associationFound) {
+        if (verbose) process.stderr.write(`\n✓ Phase 2 Storage is already complete. Skipping to next phase...\n`);
+        evidence.s3.existed = true;
+        evidence.kubernetes.namespaceExisted = true;
+        evidence.kubernetes.serviceAccountCreated = false;
+        evidence.kubernetes.podIdentityAssociated = true;
+        return { ok: true, evidence, blockers };
+      }
+    }
+  }
 
   // 2. Create bucket if missing
   if (!bucketCheck.exists) {

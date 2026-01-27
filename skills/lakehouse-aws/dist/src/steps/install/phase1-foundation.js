@@ -1,8 +1,45 @@
-import { getCluster, createCluster, createNodegroup, createAddon, createPodIdentityAssociation } from "../../tools/eksctl.js";
+import { getCluster, createCluster, createNodegroup, createAddon, createPodIdentityAssociation, deleteCluster } from "../../tools/eksctl.js";
 import { upgradeInstall } from "../../tools/helm.js";
-import { aws, waitForClusterActive, describeCluster } from "../../tools/aws.js";
+import { aws, waitForClusterActive, describeCluster, listCloudFormationStacks, deleteCloudFormationStack, waitForStacksDeleted, describeCloudFormationStack } from "../../tools/aws.js";
 import { getNodes, kubectl } from "../../tools/kubectl.js";
 import { getRole, createRole, attachPolicy } from "../../tools/iam.js";
+// Import helper functions for subnet dependency checking
+const findNetworkInterfacesInSubnets = async (subnetIds, profile, region) => {
+    const res = await aws(["ec2", "describe-network-interfaces", "--filters", `Name=subnet-id,Values=${subnetIds.join(",")}`, "--query", "NetworkInterfaces[*].NetworkInterfaceId", "--output", "text"], profile, region);
+    if (!res.ok)
+        return [];
+    return res.stdout.trim().split(/\s+/).filter(Boolean);
+};
+const getRouteTableAssociations = async (subnetIds, profile, region) => {
+    const associations = [];
+    for (const subnetId of subnetIds) {
+        const res = await aws(["ec2", "describe-route-tables", "--filters", `Name=association.subnet-id,Values=${subnetId}`, "--query", "RouteTables[*].[RouteTableId,Associations[?SubnetId==`'${subnetId}'`].RouteTableAssociationId]", "--output", "json"], profile, region);
+        if (res.ok && res.stdout.trim()) {
+            try {
+                const data = JSON.parse(res.stdout);
+                if (Array.isArray(data)) {
+                    for (const item of data) {
+                        if (Array.isArray(item) && item.length >= 2) {
+                            const routeTableId = item[0];
+                            const associationIds = item[1];
+                            if (Array.isArray(associationIds)) {
+                                for (const assocId of associationIds) {
+                                    if (assocId) {
+                                        associations.push({ routeTableId, subnetId, associationId: assocId });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (e) {
+                // Ignore parse errors
+            }
+        }
+    }
+    return associations;
+};
 export async function runPhase1Foundation(env, options) {
     const verbose = options?.verbose !== false;
     const blockers = [];
@@ -29,16 +66,509 @@ export async function runPhase1Foundation(env, options) {
     // 1. Check if cluster exists
     if (verbose) {
         process.stderr.write(`\n⏳ Checking if EKS cluster '${clusterName}' exists...\n`);
-        process.stderr.flush?.();
     }
     const clusterCheck = await getCluster(clusterName, region, profile);
     evidence.eks.existed = clusterCheck.exists;
-    if (verbose) {
-        process.stderr.write(clusterCheck.exists ? `✓ Cluster '${clusterName}' already exists\n` : `✓ Cluster '${clusterName}' not found, will create\n`);
-        process.stderr.flush?.();
+    if (clusterCheck.exists) {
+        if (verbose)
+            process.stderr.write(`✓ Cluster '${clusterName}' already exists\n`);
+        // Check if cluster is ACTIVE
+        const clusterStatus = await describeCluster(clusterName, profile, region);
+        if (clusterStatus.found && clusterStatus.status === "ACTIVE") {
+            if (verbose)
+                process.stderr.write(`✓ Cluster status: ACTIVE\n`);
+            // Update kubeconfig if needed
+            await aws(["eks", "update-kubeconfig", "--region", region, "--name", clusterName, "--alias", clusterName], profile, region);
+            evidence.eks.kubeconfigUpdated = true;
+            // Check if addons are installed and healthy
+            const addonsRes = await aws(["eks", "list-addons", "--cluster-name", clusterName, "--region", region], profile, region);
+            let addons = [];
+            if (addonsRes.ok) {
+                try {
+                    addons = JSON.parse(addonsRes.stdout).addons || [];
+                }
+                catch (e) { /* ignore */ }
+            }
+            const criticalAddons = ["vpc-cni", "kube-proxy", "coredns", "aws-ebs-csi-driver", "eks-pod-identity-agent"];
+            const missingAddons = criticalAddons.filter(a => !addons.includes(a));
+            if (missingAddons.length === 0) {
+                if (verbose)
+                    process.stderr.write(`✓ All critical EKS addons are installed\n`);
+                // Check EBS CSI Driver health
+                const ebsPods = await kubectl(["get", "pods", "-n", "kube-system", "-l", "app.kubernetes.io/name=aws-ebs-csi-driver", "-o", "json"], { AWS_PROFILE: profile, AWS_REGION: region });
+                let ebsHealthy = false;
+                if (ebsPods.ok) {
+                    try {
+                        const pods = JSON.parse(ebsPods.stdout).items || [];
+                        ebsHealthy = pods.length > 0 && pods.every((p) => p.status.phase === "Running" && !p.status.containerStatuses?.some((s) => s.state?.waiting?.reason === "CrashLoopBackOff"));
+                    }
+                    catch (e) { /* ignore */ }
+                }
+                if (ebsHealthy) {
+                    if (verbose)
+                        process.stderr.write(`✓ EBS CSI driver is healthy\n`);
+                    // Check for StorageClass
+                    const scCheck = await kubectl(["get", "sc", "gp3", "-o", "json"], { AWS_PROFILE: profile, AWS_REGION: region });
+                    if (scCheck.ok) {
+                        if (verbose)
+                            process.stderr.write(`✓ GP3 StorageClass is installed\n`);
+                        // Phase 1 is complete!
+                        evidence.eks.addonsInstalled = addons;
+                        evidence.eks.storageClassInstalled = true;
+                        evidence.eks.created = false;
+                        if (verbose)
+                            process.stderr.write(`\n✓ Phase 1 Foundation is already complete. Skipping to next phase...\n`);
+                        return { ok: true, evidence, blockers };
+                    }
+                }
+            }
+        }
+    }
+    if (verbose && !clusterCheck.exists) {
+        process.stderr.write(`✓ Cluster '${clusterName}' not found, will create\n`);
     }
     // 2. Create cluster if missing
     if (!clusterCheck.exists) {
+        // Check for orphaned CloudFormation stacks from previous failed attempts
+        if (verbose) {
+            process.stderr.write(`\n⏳ Checking for orphaned CloudFormation stacks...\n`);
+        }
+        const stacksCheck = await listCloudFormationStacks(clusterName, profile, region);
+        if (stacksCheck.ok && stacksCheck.stacks.length > 0) {
+            if (verbose) {
+                console.error(`⚠️  Found ${stacksCheck.stacks.length} orphaned CloudFormation stack(s) from previous failed creation:`);
+                stacksCheck.stacks.forEach(stack => console.error(`   - ${stack}`));
+                console.error(`\n⏳ Cleaning up orphaned stacks...`);
+            }
+            // Sort stacks to delete cluster stack last (it may have dependencies)
+            const sortedStacks = stacksCheck.stacks.sort((a, b) => {
+                if (a.includes("-cluster"))
+                    return 1; // Cluster stack last
+                if (b.includes("-cluster"))
+                    return -1;
+                return a.localeCompare(b);
+            });
+            // Check initial status of stacks before deletion
+            if (verbose && sortedStacks.length > 0) {
+                console.error(`   Checking stack status before deletion...`);
+                for (const stackName of sortedStacks) {
+                    const stackDetails = await describeCloudFormationStack(stackName, profile, region);
+                    if (stackDetails.ok) {
+                        const status = stackDetails.status || "UNKNOWN";
+                        if (status === "DELETE_IN_PROGRESS") {
+                            console.error(`   ⚠️  ${stackName} is already being deleted (${status})`);
+                            // Show resources that are still being deleted or failed
+                            if (stackDetails.resources && stackDetails.resources.length > 0) {
+                                const deletingResources = stackDetails.resources.filter((r) => r.Status === "DELETE_IN_PROGRESS" || r.Status === "DELETE_FAILED");
+                                if (deletingResources.length > 0) {
+                                    console.error(`      Resources being deleted: ${deletingResources.map((r) => `${r.Resource} (${r.Status})`).join(", ")}`);
+                                }
+                                // Also show any resources that previously failed
+                                const failedResources = stackDetails.resources.filter((r) => r.Status === "DELETE_FAILED");
+                                if (failedResources.length > 0) {
+                                    console.error(`      Resources that previously failed: ${failedResources.map((r) => r.Resource).join(", ")}`);
+                                }
+                            }
+                        }
+                        else if (status === "DELETE_FAILED") {
+                            console.error(`   ⚠️  ${stackName} previously failed to delete (${status})`);
+                            if (stackDetails.resources && stackDetails.resources.length > 0) {
+                                const failedResources = stackDetails.resources.filter((r) => r.Status === "DELETE_FAILED");
+                                if (failedResources.length > 0) {
+                                    console.error(`      Resources that failed: ${failedResources.map((r) => r.Resource).join(", ")}`);
+                                }
+                                // Show all non-deleted resources
+                                const remainingResources = stackDetails.resources.filter((r) => r.Status !== "DELETE_COMPLETE");
+                                if (remainingResources.length > 0) {
+                                    console.error(`      Resources still present: ${remainingResources.map((r) => `${r.Resource} (${r.Type}, ${r.Status})`).join(", ")}`);
+                                }
+                            }
+                        }
+                        else {
+                            console.error(`   ℹ️  ${stackName} status: ${status}`);
+                        }
+                    }
+                }
+            }
+            // Check which stacks need deletion vs are already being deleted
+            const stacksToDelete = [];
+            const stacksAlreadyDeleting = [];
+            const stacksDeleteFailed = []; // Stacks in DELETE_FAILED need special handling
+            for (const stackName of sortedStacks) {
+                const stackDetails = await describeCloudFormationStack(stackName, profile, region);
+                if (stackDetails.ok) {
+                    const status = stackDetails.status || "UNKNOWN";
+                    if (status === "DELETE_IN_PROGRESS") {
+                        stacksAlreadyDeleting.push(stackName);
+                        if (verbose) {
+                            console.error(`   ℹ️  ${stackName} is already being deleted (${status})`);
+                        }
+                    }
+                    else if (status === "DELETE_FAILED") {
+                        // Stacks in DELETE_FAILED need immediate dependency cleanup - don't wait!
+                        stacksDeleteFailed.push(stackName);
+                        if (verbose) {
+                            console.error(`   ⚠️  ${stackName} previously failed to delete (${status})`);
+                            if (stackDetails.resources && stackDetails.resources.length > 0) {
+                                const failedResources = stackDetails.resources.filter((r) => r.Status === "DELETE_FAILED");
+                                if (failedResources.length > 0) {
+                                    console.error(`      Resources that failed: ${failedResources.map((r) => r.Resource).join(", ")}`);
+                                }
+                                const remainingResources = stackDetails.resources.filter((r) => r.Status !== "DELETE_COMPLETE");
+                                if (remainingResources.length > 0) {
+                                    console.error(`      Resources still present: ${remainingResources.map((r) => `${r.Resource} (${r.Type}, ${r.Status})`).join(", ")}`);
+                                }
+                            }
+                        }
+                    }
+                    else {
+                        stacksToDelete.push(stackName);
+                    }
+                }
+                else {
+                    // If we can't check status, try to delete it
+                    stacksToDelete.push(stackName);
+                }
+            }
+            // Handle DELETE_FAILED stacks FIRST - they need immediate dependency cleanup
+            if (stacksDeleteFailed.length > 0) {
+                if (verbose) {
+                    console.error(`   ⚠️  Found ${stacksDeleteFailed.length} stack(s) in DELETE_FAILED state - cleaning up dependencies and retrying...`);
+                }
+                for (const stackName of stacksDeleteFailed) {
+                    if (verbose) {
+                        console.error(`   ⏳ Cleaning up dependencies for ${stackName}...`);
+                    }
+                    // Clean up dependencies (detach Internet Gateway, disassociate route tables, delete network interfaces)
+                    await deleteCloudFormationStack(stackName, profile, region, {
+                        cleanupDependencies: true
+                    });
+                    // Wait a moment for cleanup to propagate
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+                    // Check for termination protection
+                    const currentDetails = await describeCloudFormationStack(stackName, profile, region);
+                    if (currentDetails.ok && currentDetails.terminationProtection) {
+                        if (verbose) {
+                            console.error(`   ⏳ Disabling termination protection for ${stackName}...`);
+                        }
+                        await aws(["cloudformation", "update-termination-protection", "--stack-name", stackName, "--no-enable-termination-protection"], profile, region);
+                    }
+                    // Retry deletion
+                    if (verbose) {
+                        console.error(`   ⏳ Retrying deletion of ${stackName}...`);
+                    }
+                    await deleteCloudFormationStack(stackName, profile, region);
+                    // After retry, add to wait list
+                    stacksToDelete.push(stackName);
+                }
+            }
+            // Delete stacks that aren't already being deleted
+            if (stacksToDelete.length > 0) {
+                if (verbose) {
+                    console.error(`   Initiating deletion of ${stacksToDelete.length} stack(s) in parallel...`);
+                }
+                const deletePromises = stacksToDelete.map(async (stackName) => {
+                    // Check if stack is in DELETE_FAILED state - if so, try to clean up dependencies first
+                    const stackDetails = await describeCloudFormationStack(stackName, profile, region);
+                    const isDeleteFailed = stackDetails.ok && stackDetails.status === "DELETE_FAILED";
+                    if (isDeleteFailed) {
+                        if (verbose) {
+                            console.error(`   ⚠️  Stack ${stackName} is in DELETE_FAILED state.`);
+                            // Show WHY it failed - get detailed resource info
+                            const failedDetails = await describeCloudFormationStack(stackName, profile, region);
+                            if (failedDetails.ok && failedDetails.resources) {
+                                const failedSubnets = failedDetails.resources.filter((r) => r.Type === "AWS::EC2::Subnet" && r.Status === "DELETE_FAILED");
+                                if (failedSubnets.length > 0) {
+                                    console.error(`   🔍 Found ${failedSubnets.length} subnet(s) in DELETE_FAILED:`);
+                                    for (const subnet of failedSubnets) {
+                                        const subnetId = subnet.PhysicalResourceId || subnet.PhysicalId;
+                                        console.error(`      - ${subnet.LogicalResourceId || subnet.Resource} (${subnetId || "ID unknown"})`);
+                                        // Check what's blocking it
+                                        if (subnetId) {
+                                            const eniIds = await findNetworkInterfacesInSubnets([subnetId], profile, region);
+                                            const routeAssocs = await getRouteTableAssociations([subnetId], profile, region);
+                                            const blockers = [];
+                                            if (eniIds.length > 0)
+                                                blockers.push(`${eniIds.length} network interface(s)`);
+                                            if (routeAssocs.length > 0)
+                                                blockers.push(`${routeAssocs.length} route table association(s)`);
+                                            if (blockers.length > 0) {
+                                                console.error(`        Blocked by: ${blockers.join(", ")}`);
+                                            }
+                                            else {
+                                                console.error(`        Blocked by: Unknown dependency (checking NAT Gateways, VPC Endpoints...)`);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            console.error(`   ⏳ Forcefully cleaning up ALL dependencies...`);
+                        }
+                        // For DELETE_FAILED stacks, we MUST clean up dependencies first
+                        // This will detach Internet Gateways, disassociate route tables, delete network interfaces, etc.
+                        const cleanupResult = await deleteCloudFormationStack(stackName, profile, region, {
+                            cleanupDependencies: true
+                        });
+                        // Wait longer for cleanup to propagate (subnets can take time)
+                        await new Promise(resolve => setTimeout(resolve, 15000));
+                        // Now retry deletion
+                        if (verbose) {
+                            console.error(`   ⏳ Retrying deletion of ${stackName} after dependency cleanup...`);
+                        }
+                        // Check for termination protection before retrying
+                        const currentDetails = await describeCloudFormationStack(stackName, profile, region);
+                        if (currentDetails.ok && currentDetails.terminationProtection) {
+                            if (verbose) {
+                                console.error(`   ⚠️  Stack ${stackName} has termination protection enabled`);
+                                console.error(`   ⏳ Disabling termination protection...`);
+                            }
+                            await aws(["cloudformation", "update-termination-protection", "--stack-name", stackName, "--no-enable-termination-protection"], profile, region);
+                        }
+                        // Retry deletion
+                        return await deleteCloudFormationStack(stackName, profile, region);
+                    }
+                    else {
+                        // Normal deletion for stacks not in DELETE_FAILED
+                        const deleteResult = await deleteCloudFormationStack(stackName, profile, region);
+                        if (!deleteResult.ok) {
+                            // Check for termination protection - need to disable it first
+                            if (deleteResult.stderr.includes("TerminationProtection is enabled")) {
+                                if (verbose) {
+                                    console.error(`   ⚠️  Stack ${stackName} has termination protection enabled`);
+                                    console.error(`   ⏳ Disabling termination protection and retrying...`);
+                                }
+                                // Disable termination protection
+                                const disableResult = await aws(["cloudformation", "update-termination-protection", "--stack-name", stackName, "--no-enable-termination-protection"], profile, region);
+                                if (disableResult.ok) {
+                                    // Retry deletion
+                                    return await deleteCloudFormationStack(stackName, profile, region);
+                                }
+                            }
+                            // If stack is already being deleted or doesn't exist, that's okay
+                            if (deleteResult.stderr.includes("does not exist") ||
+                                deleteResult.stderr.includes("is in DELETE_IN_PROGRESS")) {
+                                return { ok: true, stderr: "", stdout: "" }; // Treat as success
+                            }
+                        }
+                        return deleteResult;
+                    }
+                });
+                await Promise.all(deletePromises);
+            }
+            // Combine all stacks (those we deleted and those already deleting) for waiting
+            // Note: stacks that were in DELETE_FAILED are now retried, so we wait for them too
+            const allStacksToWaitFor = [...stacksToDelete, ...stacksAlreadyDeleting];
+            // Wait for all stacks to be deleted in parallel (polling together)
+            if (verbose) {
+                if (stacksAlreadyDeleting.length > 0 && stacksToDelete.length > 0) {
+                    console.error(`   ⏳ Waiting for ${allStacksToWaitFor.length} stack(s) to be deleted (${stacksAlreadyDeleting.length} already in progress, ${stacksToDelete.length} just initiated)...`);
+                }
+                else if (stacksAlreadyDeleting.length > 0) {
+                    console.error(`   ⏳ Waiting for ${stacksAlreadyDeleting.length} stack(s) that are already being deleted (this may take a few minutes)...`);
+                }
+                else {
+                    console.error(`   ⏳ Waiting for stacks to be deleted (this may take a few minutes)...`);
+                }
+            }
+            const waitResult = await waitForStacksDeleted(allStacksToWaitFor, profile, region, 20); // 20 minute timeout for cluster stacks
+            if (waitResult.ok) {
+                if (verbose) {
+                    console.error(`   ✓ All ${waitResult.deleted.length} orphaned stacks cleaned up\n`);
+                }
+            }
+            else {
+                // Check if any stacks failed during deletion
+                if (waitResult.failed && waitResult.failed.length > 0) {
+                    if (verbose) {
+                        console.error(`\n   ⚠️  Stack(s) failed during deletion:`);
+                        for (const failed of waitResult.failed) {
+                            console.error(`      - ${failed.name}`);
+                            if (failed.resources.length > 0) {
+                                console.error(`        Resources that failed: ${failed.resources.join(", ")}`);
+                            }
+                        }
+                        console.error(`   ⏳ Attempting to clean up dependencies and retry deletion...`);
+                    }
+                    // Try dependency cleanup and retry deletion for failed stacks
+                    for (const failedStack of waitResult.failed) {
+                        const stackDetails = await describeCloudFormationStack(failedStack.name, profile, region);
+                        if (stackDetails.ok && stackDetails.status === "DELETE_FAILED") {
+                            if (verbose) {
+                                console.error(`   ⏳ Cleaning up dependencies for ${failedStack.name}...`);
+                            }
+                            // Try dependency cleanup
+                            const retryResult = await deleteCloudFormationStack(failedStack.name, profile, region, {
+                                cleanupDependencies: true
+                            });
+                            if (retryResult.ok) {
+                                if (verbose) {
+                                    console.error(`   ✓ Retried deletion for ${failedStack.name} after dependency cleanup`);
+                                }
+                            }
+                            else {
+                                if (verbose) {
+                                    console.error(`   ⚠️  Retry deletion failed: ${retryResult.stderr.substring(0, 200)}`);
+                                }
+                            }
+                        }
+                    }
+                    // Wait a bit more for retried deletions
+                    if (verbose) {
+                        console.error(`   ⏳ Waiting additional 10 minutes for retried deletions...`);
+                    }
+                    const retryWaitResult = await waitForStacksDeleted(waitResult.failed.map(f => f.name), profile, region, 10);
+                    if (retryWaitResult.ok) {
+                        if (verbose) {
+                            console.error(`   ✓ Failed stacks cleaned up after dependency cleanup\n`);
+                        }
+                        // Continue with cluster creation
+                    }
+                    else {
+                        // Still failed after retry - update remaining list
+                        waitResult.remaining = retryWaitResult.remaining;
+                        if (verbose) {
+                            console.error(`   ⚠️  Stacks still failed after dependency cleanup attempt\n`);
+                        }
+                    }
+                }
+                // Check the status of remaining stacks and get detailed diagnostics
+                const remainingStatuses = [];
+                const diagnostics = [];
+                for (const stackName of waitResult.remaining) {
+                    const stackDetails = await describeCloudFormationStack(stackName, profile, region);
+                    if (stackDetails.ok) {
+                        const status = stackDetails.status || "UNKNOWN";
+                        remainingStatuses.push(`${stackName} (${status})`);
+                        // Add diagnostics for problematic stacks
+                        if (status === "DELETE_FAILED") {
+                            diagnostics.push(`\n   Stack ${stackName} failed to delete:`);
+                            if (stackDetails.resources && stackDetails.resources.length > 0) {
+                                diagnostics.push(`   Resources preventing deletion:`);
+                                stackDetails.resources.forEach((r) => {
+                                    diagnostics.push(`     - ${r.Resource} (${r.Type}): ${r.Status}`);
+                                });
+                            }
+                            if (stackDetails.events && stackDetails.events.length > 0) {
+                                diagnostics.push(`   Recent errors:`);
+                                stackDetails.events.forEach((e) => {
+                                    if (e.Reason) {
+                                        diagnostics.push(`     - ${e.Resource}: ${e.Reason}`);
+                                    }
+                                });
+                            }
+                        }
+                        else if (status === "DELETE_IN_PROGRESS") {
+                            // Check if it's been stuck in DELETE_IN_PROGRESS for a while
+                            if (stackDetails.resources && stackDetails.resources.length > 0) {
+                                const stuckResources = stackDetails.resources.filter((r) => r.Status === "DELETE_FAILED" || r.Status === "DELETE_IN_PROGRESS");
+                                if (stuckResources.length > 0) {
+                                    diagnostics.push(`\n   Stack ${stackName} is stuck deleting:`);
+                                    stuckResources.forEach((r) => {
+                                        diagnostics.push(`     - ${r.Resource} (${r.Type}): ${r.Status}`);
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    else {
+                        remainingStatuses.push(`${stackName} (UNKNOWN - ${stackDetails.error})`);
+                    }
+                }
+                if (verbose) {
+                    console.error(`   ⚠️  ${waitResult.remaining.length} stack(s) still remain:`);
+                    remainingStatuses.forEach(s => console.error(`      - ${s}`));
+                    console.error(`   ⚠️  ${waitResult.deleted.length} stack(s) were successfully deleted`);
+                    if (diagnostics.length > 0) {
+                        diagnostics.forEach(d => console.error(d));
+                    }
+                    console.error(`\n   ⚠️  Cannot proceed with cluster creation while stacks still exist.`);
+                    if (remainingStatuses.some(s => s.includes("DELETE_IN_PROGRESS"))) {
+                        console.error(`   The remaining stack(s) are being deleted. This can take 10-15 minutes.`);
+                        console.error(`   If they remain stuck, check AWS Console for resource dependencies.`);
+                    }
+                    else if (remainingStatuses.some(s => s.includes("DELETE_FAILED"))) {
+                        console.error(`   The remaining stack(s) failed to delete. Check the diagnostics above.`);
+                        // If the cluster stack failed to delete, try using eksctl delete cluster
+                        // which might handle dependencies better (even if cluster doesn't exist, it can clean up stacks)
+                        const clusterStack = waitResult.remaining.find(s => s.includes("-cluster"));
+                        if (clusterStack) {
+                            console.error(`\n   ⏳ Attempting to use eksctl delete cluster to clean up dependencies...`);
+                            console.error(`   (This works even if the cluster doesn't exist - it cleans up CloudFormation stacks)`);
+                            const eksctlDeleteResult = await deleteCluster(clusterName, region, profile);
+                            if (eksctlDeleteResult.ok) {
+                                console.error(`   ✓ eksctl delete cluster completed. Waiting for stacks to be cleaned up...`);
+                                // Wait for stacks to be deleted (eksctl should clean them up)
+                                const recheckResult = await waitForStacksDeleted(waitResult.remaining, profile, region, 5); // 5 more minutes
+                                if (recheckResult.ok) {
+                                    console.error(`   ✓ All CloudFormation stacks cleaned up by eksctl\n`);
+                                    // Continue with cluster creation
+                                }
+                                else {
+                                    console.error(`   ⚠️  Some stacks still remain after eksctl delete: ${recheckResult.remaining.join(", ")}`);
+                                    console.error(`   Proceeding with cluster creation - eksctl should handle the conflict.\n`);
+                                    // Continue anyway - eksctl create might be able to handle existing stacks
+                                }
+                            }
+                            else {
+                                // Check if error is because cluster doesn't exist (that's okay, we're trying to clean up stacks)
+                                const errorText = eksctlDeleteResult.stderr || eksctlDeleteResult.stdout || "";
+                                if (errorText.includes("not found") || errorText.includes("does not exist")) {
+                                    console.error(`   ℹ️  Cluster doesn't exist (expected). eksctl may still clean up stacks.`);
+                                    console.error(`   Proceeding with cluster creation - eksctl should handle the stack conflict.\n`);
+                                    // Continue - eksctl create cluster might be able to reuse or clean up the failed stack
+                                }
+                                else {
+                                    console.error(`   ⚠️  eksctl delete cluster failed: ${errorText.substring(0, 200)}`);
+                                    console.error(`   You may need to manually delete resources in AWS Console.`);
+                                    console.error(`   Or try: eksctl delete cluster --region ${region} --name ${clusterName} --wait\n`);
+                                }
+                            }
+                        }
+                        else {
+                            console.error(`   You may need to manually delete resources in AWS Console.`);
+                        }
+                    }
+                    else {
+                        console.error(`   The remaining stack(s) may be stuck. You may need to manually delete them from AWS Console.`);
+                    }
+                    console.error(``);
+                }
+                // Final check - if cluster is gone and we've tried eksctl, proceed with creation
+                // eksctl create cluster should be able to handle existing stacks (it will either reuse or fail with a clear error)
+                const finalClusterCheck = await describeCluster(clusterName, profile, region);
+                if (!finalClusterCheck.found && finalClusterCheck.status === "NOT_FOUND") {
+                    if (verbose) {
+                        console.error(`   ℹ️  Cluster doesn't exist. Proceeding with cluster creation.`);
+                        console.error(`   If stack conflicts occur, eksctl will provide clear error messages.\n`);
+                    }
+                    // Continue with cluster creation - eksctl will handle any conflicts
+                }
+                else if (waitResult.remaining.length > 0) {
+                    // Stacks still exist but we've tried cleanup - let eksctl create handle it
+                    if (verbose) {
+                        console.error(`   ℹ️  Some stacks still exist, but proceeding with cluster creation.`);
+                        console.error(`   eksctl create cluster will either reuse them or provide clear error messages.\n`);
+                    }
+                    // Continue - eksctl create might be able to handle the existing stack
+                }
+                else {
+                    // This shouldn't happen, but just in case
+                    blockers.push({
+                        code: "CLOUDFORMATION_STACKS_REMAINING",
+                        message: `CloudFormation stacks still exist after cleanup: ${waitResult.remaining.join(", ")}. ` +
+                            `Status: ${remainingStatuses.join("; ")}. ` +
+                            (diagnostics.length > 0 ? `\n${diagnostics.join("\n")}` : "") +
+                            `\nWait a few minutes if stacks are in DELETE_IN_PROGRESS, or manually delete them from AWS Console.`,
+                    });
+                    return { ok: false, evidence, blockers };
+                }
+            }
+        }
+        else if (stacksCheck.ok) {
+            if (verbose) {
+                process.stderr.write(`✓ No orphaned stacks found\n`);
+            }
+        }
         if (verbose) {
             console.error(`\n⏳ Creating EKS cluster '${clusterName}' (this takes ~15 minutes)...`);
             console.error(`   Region: ${region}`);
@@ -55,12 +585,57 @@ export async function runPhase1Foundation(env, options) {
             nodeCount,
         });
         if (!createResult.ok) {
-            if (verbose)
-                console.error(`❌ Failed to create cluster: ${createResult.stderr.substring(0, 200)}`);
-            blockers.push({
-                code: "EKS_CLUSTER_CREATE_FAILED",
-                message: `Failed to create EKS cluster: ${createResult.stderr}`,
-            });
+            // Check if eksctl is not found (exit code 127 or "Command not found" message)
+            const exitCode = createResult.exitCode ?? (createResult.ok ? 0 : 1);
+            const isCommandNotFound = exitCode === 127 ||
+                createResult.stderr.includes("Command not found") ||
+                createResult.stderr.includes("eksctl not found") ||
+                createResult.stderr.includes("command not found: eksctl");
+            // Check if CloudFormation stack already exists (leftover from failed creation)
+            const hasCloudFormationConflict = createResult.stderr.includes("AlreadyExistsException") ||
+                createResult.stderr.includes("Stack") && createResult.stderr.includes("already exists") ||
+                createResult.stdout.includes("AlreadyExistsException");
+            if (isCommandNotFound) {
+                const errorMsg = `eksctl is not installed.\n\n` +
+                    `To fix this, choose one option:\n` +
+                    `  1. Install eksctl: https://eksctl.io/installation/\n` +
+                    `  2. Use Docker mode: lakehouse install --approve true --exec docker\n\n` +
+                    `Docker mode runs eksctl inside a Docker container, so you don't need to install it locally.`;
+                if (verbose) {
+                    console.error(`\n❌ ${errorMsg}`);
+                }
+                blockers.push({
+                    code: "EKSCTL_NOT_FOUND",
+                    message: errorMsg,
+                });
+            }
+            else if (hasCloudFormationConflict) {
+                const errorMsg = `CloudFormation stack for cluster '${clusterName}' already exists from a previous failed creation.\n\n` +
+                    `To fix this, you need to clean up the existing stack:\n` +
+                    `  1. Delete the CloudFormation stack manually in AWS Console, OR\n` +
+                    `  2. Run: eksctl delete cluster --region ${region} --name ${clusterName}\n` +
+                    `     (This will clean up all related resources)\n` +
+                    `  3. Then re-run: lakehouse install --approve true --exec docker\n\n` +
+                    `Note: If the cluster was partially created, you may need to delete it from AWS Console first.`;
+                if (verbose) {
+                    console.error(`\n❌ ${errorMsg}`);
+                }
+                blockers.push({
+                    code: "CLOUDFORMATION_STACK_EXISTS",
+                    message: errorMsg,
+                });
+            }
+            else {
+                const errorPreview = createResult.stderr.length > 300
+                    ? createResult.stderr.substring(0, 300) + "..."
+                    : createResult.stderr;
+                if (verbose)
+                    console.error(`❌ Failed to create cluster: ${errorPreview}`);
+                blockers.push({
+                    code: "EKS_CLUSTER_CREATE_FAILED",
+                    message: `Failed to create EKS cluster: ${createResult.stderr}`,
+                });
+            }
             return { ok: false, evidence, blockers };
         }
         evidence.eks.created = true;
@@ -330,23 +905,57 @@ export async function runPhase1Foundation(env, options) {
         region,
         profile,
     });
-    if (ebsPodIdentity.ok || ebsPodIdentity.stderr.includes("already exists")) {
+    // Verify association exists
+    const associationCheck = await aws(["eks", "list-pod-identity-associations", "--cluster-name", clusterName, "--region", region], profile, region);
+    let associationFound = false;
+    if (associationCheck.ok) {
+        try {
+            const data = JSON.parse(associationCheck.stdout);
+            associationFound = data.associations?.some((a) => a.namespace === "kube-system" && a.serviceAccount === "ebs-csi-controller-sa");
+        }
+        catch (e) { /* ignore */ }
+    }
+    if (ebsPodIdentity.ok || associationFound) {
         if (verbose)
-            console.error(`✓ Pod identity association created`);
+            console.error(`✓ Pod identity association verified`);
         // 11. Restart EBS CSI controller pods to pick up the new IAM role
         if (verbose)
             console.error(`⏳ Restarting EBS CSI controller pods to apply new IAM role...`);
         const restartResult = await kubectl(["delete", "pods", "-n", "kube-system", "-l", "app.kubernetes.io/name=aws-ebs-csi-driver,app.kubernetes.io/component=csi-controller"], { AWS_PROFILE: profile, AWS_REGION: region });
         if (verbose)
             console.error(`✓ Controller pods restarted`);
-        // Wait a bit for new pods to start
+        // Wait for new pods to start and verify health
         if (verbose)
-            console.error(`⏳ Waiting 30s for EBS CSI controllers to stabilize...`);
-        await new Promise(resolve => setTimeout(resolve, 30000));
+            console.error(`⏳ Waiting for EBS CSI controllers to stabilize...`);
+        let healthy = false;
+        for (let i = 0; i < 5; i++) {
+            await new Promise(resolve => setTimeout(resolve, 15000));
+            const healthCheck = await kubectl(["get", "pods", "-n", "kube-system", "-l", "app.kubernetes.io/name=aws-ebs-csi-driver,app.kubernetes.io/component=csi-controller", "-o", "json"], { AWS_PROFILE: profile, AWS_REGION: region });
+            if (healthCheck.ok) {
+                try {
+                    const podsData = JSON.parse(healthCheck.stdout);
+                    const pods = podsData.items || [];
+                    if (pods.length > 0 && pods.every((p) => p.status.phase === "Running")) {
+                        healthy = true;
+                        break;
+                    }
+                }
+                catch (e) { /* ignore */ }
+            }
+        }
+        if (healthy) {
+            if (verbose)
+                console.error(`✓ EBS CSI driver is healthy`);
+        }
+        else {
+            if (verbose)
+                console.error(`⚠️  EBS CSI driver still stabilizing...`);
+        }
     }
     else {
+        const errorMsg = ebsPodIdentity.raw?.stderr || "Unknown error";
         if (verbose)
-            console.error(`⚠️  Failed to create pod identity association: ${ebsPodIdentity.stderr.substring(0, 200)}`);
+            console.error(`⚠️  Failed to create pod identity association: ${errorMsg.substring(0, 200)}`);
     }
     // 12. Install StorageClass via Helm
     if (verbose)
@@ -376,6 +985,43 @@ export async function runPhase1Foundation(env, options) {
     }
     else if (verbose) {
         console.error(`   ⚠️  aws-mountpoint-s3-csi-driver may already exist`);
+    }
+    // 12. Verify critical addon health (EBS CSI Driver)
+    if (verbose)
+        console.error(`\n⏳ Verifying EBS CSI driver health...`);
+    const ebsHealthCheck = await kubectl(["get", "pods", "-n", "kube-system", "-l", "app.kubernetes.io/name=aws-ebs-csi-driver", "-o", "json"], { AWS_PROFILE: profile, AWS_REGION: region, CLUSTER_NAME: clusterName });
+    if (ebsHealthCheck.ok) {
+        try {
+            const podsData = JSON.parse(ebsHealthCheck.stdout);
+            const pods = podsData.items || [];
+            const controllerPods = pods.filter((p) => p.metadata.name.includes("ebs-csi-controller"));
+            const crashLoopPods = controllerPods.filter((p) => p.status?.containerStatuses?.some((s) => s.state?.waiting?.reason === "CrashLoopBackOff"));
+            if (crashLoopPods.length > 0) {
+                const errorMsg = `EBS CSI driver is in CrashLoopBackOff. Stateful services will fail to start.\n\n` +
+                    `Common causes:\n` +
+                    `  1. IAM role permissions are incorrect\n` +
+                    `  2. Pod identity association failed\n\n` +
+                    `To debug: kubectl describe pod ${crashLoopPods[0].metadata.name} -n kube-system`;
+                if (verbose)
+                    console.error(`❌ ${errorMsg}`);
+                blockers.push({
+                    code: "EBS_CSI_DRIVER_UNHEALTHY",
+                    message: errorMsg,
+                });
+            }
+            else if (controllerPods.length === 0) {
+                if (verbose)
+                    console.error(`⚠️  EBS CSI driver controller pods not found.`);
+                // Don't block yet, maybe they're just starting
+            }
+            else {
+                if (verbose)
+                    console.error(`✓ EBS CSI driver is healthy`);
+            }
+        }
+        catch (e) {
+            // Ignore parse errors
+        }
     }
     return {
         ok: blockers.length === 0,

@@ -9,6 +9,8 @@ import { runPhase6Datalake, Phase6Evidence } from "./steps/install/phase6-datala
 import { runPhase7Ingress, Phase7Evidence } from "./steps/install/phase7-ingress.js";
 import { readEnvFile } from "./tools/file.js";
 import { checkInstallationState, displayInstallationState } from "./steps/checks/installation-state.js";
+import { checkDockerAvailable } from "./steps/checks.js";
+import { getExecMode } from "./tools/shell.js";
 
 export type InstallResult = {
   status: "needs_input" | "completed_phase" | "blocked_phase" | "completed" | "error";
@@ -33,17 +35,32 @@ export type InstallResult = {
   next?: { action: "install" | "fix" | "stop"; phase?: string };
 };
 
-function renderInstallPlan(env: Record<string, string>): string {
+export function renderInstallPlan(env: Record<string, string>, colors?: { GREEN: string; NC: string }): string {
+  const GREEN = colors?.GREEN || "";
+  const NC = colors?.NC || "";
+  
+  const namespace = env.NAMESPACE || "ingext";
+  const siteDomain = env.SITE_DOMAIN || "N/A";
+  const finalUrl = siteDomain !== "N/A" ? `https://${siteDomain}` : "N/A (will be configured after ALB provisioning)";
+  
+  // Helper to highlight env variable values
+  const highlight = (value: string) => `${GREEN}${value}${NC}`;
+  
   return `
 ═══════════════════════════════════════════════════════════════
 Installation Plan
 ═══════════════════════════════════════════════════════════════
 
+📋 Configuration Summary:
+  • Namespace:     ${highlight(namespace)}
+  • Site Domain:  ${highlight(siteDomain)}
+  • Final URL:     ${highlight(finalUrl)}
+
 Phase 1: Foundation (EKS)
-  • EKS Cluster: ${env.CLUSTER_NAME}
-  • Region: ${env.AWS_REGION}
-  • Node Type: ${env.NODE_TYPE}
-  • Node Count: ${env.NODE_COUNT}
+  • EKS Cluster: ${highlight(env.CLUSTER_NAME)}
+  • Region: ${highlight(env.AWS_REGION)}
+  • Node Type: ${highlight(env.NODE_TYPE)}
+  • Node Count: ${highlight(env.NODE_COUNT)}
   • Kubernetes Version: 1.34
 
   Components to install:
@@ -53,20 +70,20 @@ Phase 1: Foundation (EKS)
   • GP3 StorageClass
 
 Phase 2: Storage (S3 & IAM)
-  • S3 Bucket: ${env.S3_BUCKET}
-  • Region: ${env.AWS_REGION}
+  • S3 Bucket: ${highlight(env.S3_BUCKET)}
+  • Region: ${highlight(env.AWS_REGION)}
   • IAM Policy: S3 access for lakehouse
-  • Namespace: ${env.NAMESPACE || "ingext"}
+  • Namespace: ${highlight(namespace)}
   • Pod Identity: Link ServiceAccount to IAM role
 
 Phase 3: Compute (Karpenter)
-  • Cluster: ${env.CLUSTER_NAME}
+  • Cluster: ${highlight(env.CLUSTER_NAME)}
   • Version: 1.8.3 (compatible with EKS 1.34+)
   • Autoscaling: Karpenter controller + node pools
   • IAM: Node role + Controller role with Pod Identity
 
 Phase 4: Core Services
-  • Namespace: ${env.NAMESPACE || "ingext"}
+  • Namespace: ${highlight(namespace)}
   • Charts to install:
     - ingext-stack (Redis, OpenSearch, VictoriaMetrics)
     - etcd-single
@@ -75,8 +92,8 @@ Phase 4: Core Services
   • Pod Readiness: Wait for all pods to be Ready
 
 Phase 5: Application Stream
-  • Namespace: ${env.NAMESPACE || "ingext"}
-  • Site Domain: ${env.SITE_DOMAIN || "N/A"}
+  • Namespace: ${highlight(namespace)}
+  • Site Domain: ${highlight(siteDomain)}
   • Charts to install:
     - ingext-community-config (with siteDomain)
     - ingext-community-init
@@ -84,8 +101,8 @@ Phase 5: Application Stream
   • Pod Readiness: Wait for all pods to be Ready (15 min timeout)
 
 Phase 6: Application Datalake
-  • S3 Bucket: ${env.S3_BUCKET}
-  • Region: ${env.AWS_REGION}
+  • S3 Bucket: ${highlight(env.S3_BUCKET)}
+  • Region: ${highlight(env.AWS_REGION)}
   • Charts to install:
     - ingext-lake-config (storageType=s3)
     - ingext-merge-pool (Karpenter node pool)
@@ -105,6 +122,30 @@ export async function runInstall(
   preflightResult?: PreflightResult
 ): Promise<InstallResult> {
   const verbose = input.verbose !== false; // Default to true for user feedback
+  
+  // Check Docker availability if Docker mode is being used
+  const execMode = getExecMode();
+  if (execMode === "docker") {
+    const dockerCheck = await checkDockerAvailable();
+    if (!dockerCheck.ok) {
+      return {
+        status: "error",
+        blockers: [
+          {
+            code: "DOCKER_NOT_RUNNING",
+            message: `Docker is not running. Please start Docker Desktop and try again.\n\n` +
+                    `To fix:\n` +
+                    `  1. Open Docker Desktop application\n` +
+                    `  2. Wait for Docker to fully start (whale icon in menu bar should be steady)\n` +
+                    `  3. Verify with: docker ps\n` +
+                    `  4. Then re-run: lakehouse install --approve true --exec docker\n\n` +
+                    `Alternative: Use --exec local (requires eksctl, kubectl, helm installed locally)`,
+          },
+        ],
+      };
+    }
+  }
+  
   // If preflightResult is provided, use it (normal flow)
   // Otherwise, require namespace and load env file (standalone install flow)
   let env = input.env;
@@ -155,6 +196,7 @@ export async function runInstall(
   
   // Approval gate
   if (!input.approve) {
+    // Render plan without colors (colors will be added in CLI display)
     return {
       status: "needs_input",
       required: ["approve"],

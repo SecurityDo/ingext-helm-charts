@@ -139,6 +139,33 @@ export async function deleteRole(roleName: string, profile: string) {
     }
   }
 
+  // Remove role from instance profiles (required before deletion)
+  const instanceProfilesResult = await run(
+    "aws",
+    [
+      "iam",
+      "list-instance-profiles-for-role",
+      "--role-name",
+      roleName,
+      "--query",
+      "InstanceProfiles[*].InstanceProfileName",
+      "--output",
+      "text",
+    ],
+    { AWS_PROFILE: profile }
+  );
+
+  if (instanceProfilesResult.ok && instanceProfilesResult.stdout.trim()) {
+    const instanceProfiles = instanceProfilesResult.stdout.trim().split(/\s+/).filter(Boolean);
+    for (const instanceProfileName of instanceProfiles) {
+      await run(
+        "aws",
+        ["iam", "remove-role-from-instance-profile", "--instance-profile-name", instanceProfileName, "--role-name", roleName],
+        { AWS_PROFILE: profile }
+      );
+    }
+  }
+
   // Finally, delete the role
   const deleteResult = await run(
     "aws",

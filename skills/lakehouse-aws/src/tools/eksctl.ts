@@ -112,6 +112,36 @@ export async function createPodIdentityAssociation(config: PodIdentityConfig) {
     config.region,
   ];
   const res = await eksctl(args, { AWS_PROFILE: config.profile, AWS_DEFAULT_REGION: config.region });
+  
+  // If eksctl fails, try AWS CLI as fallback (eksctl can be finicky)
+  if (!res.ok && !res.stderr.includes("already exists")) {
+    const { aws } = await import("./aws.js");
+    
+    // Need role ARN for AWS CLI
+    const roleRes = await aws(["iam", "get-role", "--role-name", config.roleName], config.profile, config.region);
+    if (roleRes.ok) {
+      try {
+        const roleData = JSON.parse(roleRes.stdout);
+        const roleArn = roleData.Role.Arn;
+        
+        const awsRes = await aws([
+          "eks", "create-pod-identity-association",
+          "--cluster-name", config.cluster,
+          "--namespace", config.namespace,
+          "--service-account", config.serviceAccountName,
+          "--role-arn", roleArn,
+          "--region", config.region
+        ], config.profile, config.region);
+        
+        if (awsRes.ok || awsRes.stderr.includes("ResourceInUseException")) {
+          return { ok: true, raw: awsRes };
+        }
+      } catch (e) {
+        // Fallback to original error
+      }
+    }
+  }
+
   // Ignore errors if already exists (idempotency)
   return { ok: res.ok || res.stderr.includes("already exists"), raw: res };
 }
