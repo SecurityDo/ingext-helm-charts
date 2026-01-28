@@ -141,7 +141,7 @@ export async function checkInstallationState(
     if (helmList.ok) {
       try {
         const releases = JSON.parse(helmList.stdout);
-        const datalakeCharts = ["ingext-lake-config", "ingext-eks-pool", "ingext-s3-lake", "ingext-lake"];
+        const datalakeCharts = ["ingext-lake-config", "ingext-merge-pool", "ingext-search-pool", "ingext-s3-lake", "ingext-lake"];
         state.details.datalakeChartsInstalled = releases
           .filter((r: any) => datalakeCharts.includes(r.name) && r.status === "deployed")
           .map((r: any) => r.name);

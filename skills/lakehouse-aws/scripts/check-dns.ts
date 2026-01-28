@@ -12,8 +12,6 @@ import { getALBHostname, testALBReadiness } from "../src/tools/alb.js";
 import { run, setExecMode } from "../src/tools/shell.js";
 
 async function main() {
-  setExecMode("docker");
-
   console.error("=".repeat(60));
   console.error("🔍 DNS Configuration Diagnostic");
   console.error("=".repeat(60));
@@ -106,8 +104,11 @@ async function main() {
         console.error(`   Type: ${record.Type}`);
         
         if (record.AliasTarget) {
+          const aliasDns = record.AliasTarget.DNSName.replace(/\.$/, "");
+          const expectedDns = albHostname.replace(/\.$/, "");
+          
           console.error(`   Alias Target: ${record.AliasTarget.DNSName}`);
-          if (record.AliasTarget.DNSName === albHostname) {
+          if (aliasDns === expectedDns) {
             console.error(`   ✓ Points to correct ALB`);
           } else {
             console.error(`   ❌ Points to wrong ALB: ${record.AliasTarget.DNSName}`);

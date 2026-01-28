@@ -288,6 +288,11 @@ export async function runPhase6Datalake(
       storageType: "s3",
       "s3.bucket": bucketName,
       "s3.region": region,
+      // Provide dummy values for other storage types to avoid Helm template nil pointer errors
+      "gcs.bucket": "unused",
+      "gcs.project": "unused",
+      "blob.storageAccount": "unused",
+      "blob.container": "unused",
     },
     { AWS_PROFILE: profile, AWS_REGION: region }
   );

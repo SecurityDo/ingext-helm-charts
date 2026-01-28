@@ -577,6 +577,7 @@ async function deleteNetworkInterfaces(
       if (res.stderr.includes("does not exist") || res.stderr.includes("InvalidNetworkInterfaceID.NotFound")) {
         deleted.push(eniId); // Treat as success
       } else if (res.stderr.includes("is currently in use") || res.stderr.includes("InvalidAttachmentID.NotFound")) {
+        console.error(`   ⚠️  ENI ${eniId} is still in use, waiting 10s...`);
         // Try waiting and retrying
         await new Promise(resolve => setTimeout(resolve, 10000));
         const retryRes = await aws(
@@ -587,9 +588,11 @@ async function deleteNetworkInterfaces(
         if (retryRes.ok || retryRes.stderr.includes("does not exist")) {
           deleted.push(eniId);
         } else {
+          console.error(`   ❌ Failed to delete ENI ${eniId}: ${retryRes.stderr}`);
           failed.push(eniId);
         }
       } else {
+        console.error(`   ❌ Failed to delete ENI ${eniId}: ${res.stderr}`);
         failed.push(eniId);
       }
     }
@@ -865,8 +868,142 @@ async function deleteLoadBalancersInVpc(
 }
 
 /**
+ * Find and delete VPC Endpoints associated with a VPC
+ */
+async function deleteVpcEndpointsInVpc(
+  vpcId: string,
+  awsProfile: string,
+  awsRegion: string
+): Promise<{ deleted: number; failed: number }> {
+  let deleted = 0;
+  let failed = 0;
+  
+  const res = await aws(
+    ["ec2", "describe-vpc-endpoints", "--filters", `Name=vpc-id,Values=${vpcId}`, "--query", "VpcEndpoints[?State!='deleted'].VpcEndpointId", "--output", "json"],
+    awsProfile,
+    awsRegion
+  );
+  
+  if (res.ok && res.stdout.trim()) {
+    try {
+      const endpointIds = JSON.parse(res.stdout);
+      for (const id of endpointIds) {
+        const delRes = await aws(
+          ["ec2", "delete-vpc-endpoints", "--vpc-endpoint-ids", id],
+          awsProfile,
+          awsRegion
+        );
+        if (delRes.ok) {
+          deleted++;
+        } else {
+          failed++;
+        }
+      }
+    } catch (e) {
+      // Ignore parse errors
+    }
+  }
+  
+  return { deleted, failed };
+}
+
+/**
+ * Find and delete VPC Peering Connections associated with a VPC
+ */
+async function deleteVpcPeeringConnectionsInVpc(
+  vpcId: string,
+  awsProfile: string,
+  awsRegion: string
+): Promise<{ deleted: number; failed: number }> {
+  let deleted = 0;
+  let failed = 0;
+  
+  // Check as requester
+  const resReq = await aws(
+    ["ec2", "describe-vpc-peering-connections", "--filters", `Name=requester-vpc-info.vpc-id,Values=${vpcId}`, "--query", "VpcPeeringConnections[?Status.Code!='deleted'].VpcPeeringConnectionId", "--output", "json"],
+    awsProfile,
+    awsRegion
+  );
+  
+  // Check as accepter
+  const resAcc = await aws(
+    ["ec2", "describe-vpc-peering-connections", "--filters", `Name=accepter-vpc-info.vpc-id,Values=${vpcId}`, "--query", "VpcPeeringConnections[?Status.Code!='deleted'].VpcPeeringConnectionId", "--output", "json"],
+    awsProfile,
+    awsRegion
+  );
+  
+  const peeringIds = new Set<string>();
+  if (resReq.ok && resReq.stdout.trim()) {
+    try {
+      const ids = JSON.parse(resReq.stdout);
+      ids.forEach((id: string) => peeringIds.add(id));
+    } catch (e) {}
+  }
+  if (resAcc.ok && resAcc.stdout.trim()) {
+    try {
+      const ids = JSON.parse(resAcc.stdout);
+      ids.forEach((id: string) => peeringIds.add(id));
+    } catch (e) {}
+  }
+  
+  for (const id of peeringIds) {
+    const delRes = await aws(
+      ["ec2", "delete-vpc-peering-connection", "--vpc-peering-connection-id", id],
+      awsProfile,
+      awsRegion
+    );
+    if (delRes.ok) {
+      deleted++;
+    } else {
+      failed++;
+    }
+  }
+  
+  return { deleted, failed };
+}
+
+/**
+ * Find and delete Target Groups associated with a VPC
+ */
+async function deleteTargetGroupsInVpc(
+  vpcId: string,
+  awsProfile: string,
+  awsRegion: string
+): Promise<{ deleted: number; failed: number }> {
+  let deleted = 0;
+  let failed = 0;
+  
+  const res = await aws(
+    ["elbv2", "describe-target-groups", "--query", `TargetGroups[?VpcId=='${vpcId}'].TargetGroupArn`, "--output", "json"],
+    awsProfile,
+    awsRegion
+  );
+  
+  if (res.ok && res.stdout.trim()) {
+    try {
+      const tgArns = JSON.parse(res.stdout);
+      for (const arn of tgArns) {
+        const delRes = await aws(
+          ["elbv2", "delete-target-group", "--target-group-arn", arn],
+          awsProfile,
+          awsRegion
+        );
+        if (delRes.ok) {
+          deleted++;
+        } else {
+          failed++;
+        }
+      }
+    } catch (e) {
+      // Ignore parse errors
+    }
+  }
+  
+  return { deleted, failed };
+}
+
+/**
  * Forcefully clean up a subnet and ALL its dependencies
- * This is called when a subnet is stuck in DELETE_FAILED
  */
 async function forceCleanupSubnet(
   subnetId: string,
@@ -877,16 +1014,24 @@ async function forceCleanupSubnet(
   const dependencies: string[] = [];
   let cleaned = true;
   
-  // 0. Check for and delete Load Balancers using this subnet
+  // 0. Check for and delete Load Balancers and Target Groups using this VPC/subnet
   const vpcId = await getVpcIdFromSubnet(subnetId, awsProfile, awsRegion);
   if (vpcId) {
+    // Delete Load Balancers
     const lbResult = await deleteLoadBalancersInVpc(vpcId, awsProfile, awsRegion, subnetId);
     if (lbResult.deleted > 0) {
       dependencies.push(`${lbResult.deleted} Load Balancer(s)`);
-      // Wait for LB deletion to propagate
-      await new Promise(resolve => setTimeout(resolve, 10000));
+      await new Promise(resolve => setTimeout(resolve, 5000));
     }
-    if (lbResult.failed > 0) {
+    
+    // Delete Target Groups
+    const tgResult = await deleteTargetGroupsInVpc(vpcId, awsProfile, awsRegion);
+    if (tgResult.deleted > 0) {
+      dependencies.push(`${tgResult.deleted} Target Group(s)`);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+    
+    if (lbResult.failed > 0 || tgResult.failed > 0) {
       cleaned = false;
     }
   }
@@ -1050,10 +1195,46 @@ async function forceCleanupVpc(
   if (lbResult.deleted > 0) dependencies.push(`${lbResult.deleted} Load Balancer(s)`);
   if (lbResult.failed > 0) cleaned = false;
   
+  // 1.5 Delete Target Groups
+  const tgResult = await deleteTargetGroupsInVpc(vpcId, awsProfile, awsRegion);
+  if (tgResult.deleted > 0) dependencies.push(`${tgResult.deleted} Target Group(s)`);
+  if (tgResult.failed > 0) cleaned = false;
+  
+  // 1.6 Delete VPC Endpoints
+  const endpointResult = await deleteVpcEndpointsInVpc(vpcId, awsProfile, awsRegion);
+  if (endpointResult.deleted > 0) dependencies.push(`${endpointResult.deleted} VPC Endpoint(s)`);
+  if (endpointResult.failed > 0) cleaned = false;
+  
+  // 1.7 Delete VPC Peering Connections
+  const peeringResult = await deleteVpcPeeringConnectionsInVpc(vpcId, awsProfile, awsRegion);
+  if (peeringResult.deleted > 0) dependencies.push(`${peeringResult.deleted} VPC Peering(s)`);
+  if (peeringResult.failed > 0) cleaned = false;
+  
   // 2. Delete Security Groups (except default)
   const sgResult = await deleteSecurityGroupsInVpc(vpcId, awsProfile, awsRegion);
   if (sgResult.deleted > 0) dependencies.push(`${sgResult.deleted} Security Group(s)`);
   if (sgResult.failed > 0) cleaned = false;
+  
+  // 2.5 Clean up ALL subnets in the VPC
+  const subnetsRes = await aws(
+    ["ec2", "describe-subnets", "--filters", `Name=vpc-id,Values=${vpcId}`, "--query", "Subnets[*].SubnetId", "--output", "json"],
+    awsProfile,
+    awsRegion
+  );
+  if (subnetsRes.ok && subnetsRes.stdout.trim()) {
+    try {
+      const subnetIds = JSON.parse(subnetsRes.stdout);
+      if (subnetIds.length > 0) {
+        console.error(`   ⏳ Cleaning up ${subnetIds.length} subnet(s) in VPC ${vpcId}...`);
+        for (const sid of subnetIds) {
+          await forceCleanupSubnet(sid, "ManualCleanup", awsProfile, awsRegion);
+          // Try to delete the subnet directly
+          await aws(["ec2", "delete-subnet", "--subnet-id", sid], awsProfile, awsRegion);
+        }
+        dependencies.push(`${subnetIds.length} Subnet(s)`);
+      }
+    } catch (e) {}
+  }
   
   // 3. Detach and delete Internet Gateway
   const igwId = await getInternetGatewayForVpc(vpcId, awsProfile, awsRegion);
@@ -1194,7 +1375,7 @@ async function checkStackDeleted(
   stackName: string,
   awsProfile: string,
   awsRegion: string,
-  stuckThresholdMinutes: number = 5
+  stuckThresholdMinutes: number = 3
 ): Promise<{ deleted: boolean; status?: string; deletingResources?: string[]; stuckResources?: Array<{ name: string; type: string; dependencies?: string[] }> }> {
   const checkRes = await aws(
     ["cloudformation", "describe-stacks", "--stack-name", stackName, "--query", "Stacks[0].StackStatus", "--output", "text"],
@@ -1326,7 +1507,7 @@ export async function waitForStacksDeleted(
   
   // Track when resources first appeared as stuck (for proactive cleanup)
   const stuckResourceTimestamps: Map<string, number> = new Map();
-  const stuckThresholdMinutes = 5; // Clean up dependencies if stuck > 5 minutes
+  const stuckThresholdMinutes = 3; // Clean up dependencies if stuck > 3 minutes
   
   while (attempts < maxAttempts && remainingStacks.length > 0) {
     await new Promise(resolve => setTimeout(resolve, pollIntervalSeconds * 1000));

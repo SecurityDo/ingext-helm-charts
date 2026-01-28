@@ -24,9 +24,6 @@ const ALB_HOSTED_ZONES: Record<string, string> = {
 };
 
 async function main() {
-  // Set execution mode to docker
-  setExecMode("docker");
-
   console.error("=".repeat(60));
   console.error("🌐 Configure DNS for Lakehouse");
   console.error("=".repeat(60));
