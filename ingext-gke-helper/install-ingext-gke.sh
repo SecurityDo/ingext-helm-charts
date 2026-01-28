@@ -76,6 +76,7 @@ SKIP_GKE_CREATE=0
 VPC_NETWORK="${VPC_NETWORK:-}"
 SUBNET="${SUBNET:-}"
 
+k8sProvider=gke
 # -------- Parse arguments --------
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -246,6 +247,19 @@ fi
 log "Get kubectl credentials"
 gcloud container clusters get-credentials "$CLUSTER_NAME" --region="$REGION" --project="$PROJECT_ID"
 
+# refresh aws public ecr login (needed for Ingext charts)
+if command -v aws >/dev/null 2>&1; then
+  if aws sts get-caller-identity >/dev/null 2>&1; then
+    log "Refreshing AWS ECR Public login..."
+    aws ecr-public get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin public.ecr.aws || true
+  else
+    log "AWS CLI not authenticated. Clearing stale tokens to allow anonymous pull..."
+    helm registry logout public.ecr.aws >/dev/null 2>&1 || true
+  fi
+fi
+
+
+
 log "Create namespace: $NAMESPACE"
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
@@ -268,13 +282,16 @@ wait_ns_pods_ready "$NAMESPACE" "900s"
 
 log "Install Ingext config (siteDomain=$SITE_DOMAIN)"
 helm upgrade --install ingext-community-config oci://public.ecr.aws/ingext/ingext-community-config \
-  -n "$NAMESPACE" --set "siteDomain=$SITE_DOMAIN"
+  -n "$NAMESPACE" --set "siteDomain=$SITE_DOMAIN" --set k8sProvider="$k8sProvider"
 
 log "Run initialization jobs"
 helm upgrade --install ingext-community-init oci://public.ecr.aws/ingext/ingext-community-init -n "$NAMESPACE"
 
+log "setup service account role"
+helm install ingext-manager-role oci://public.ecr.aws/ingext/ingext-manager-role -n "$NAMESPACE"
+
 log "Install main application"
-helm upgrade --install ingext-community oci://public.ecr.aws/ingext/ingext-community -n "$NAMESPACE"
+helm upgrade --install ingext-community oci://public.ecr.aws/ingext/ingext-community -n "$NAMESPACE" --set k8sProvider="$k8sProvider"
 
 wait_ns_pods_ready "$NAMESPACE" "1200s"
 
