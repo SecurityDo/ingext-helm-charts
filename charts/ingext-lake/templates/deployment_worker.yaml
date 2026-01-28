@@ -14,9 +14,13 @@ spec:
   ## Pod configuration template.
   template:
     metadata:
+      annotations:
+        {{- if eq .Values.k8sProvider "gcp" }}
+        "gke-gcsfuse.csi.storage.gke.io/mount-volumes": "true"
+        {{- end }}    
       labels:
         "ingext.io/app": "lake-worker"
-        {{- if eq .Values.k8sProvider "aks" }}
+        {{- if eq .Values.k8sProvider "azure" }}
         "azure.workload.identity/use": "true"
         {{- end }}
         {{- with .Values.podLabels }}

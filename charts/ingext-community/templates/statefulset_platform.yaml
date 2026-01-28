@@ -34,13 +34,16 @@ spec:
       ## will need to update the labeling schema to be unique per etcd cluster.
       labels:
         "ingext.io/app": "platform"
-        {{- if eq .Values.k8sProvider "aks" }}
+        {{- if eq .Values.k8sProvider "azure" }}
         "azure.workload.identity/use": "true"
         {{- end }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
+        {{- if eq .Values.k8sProvider "gcp" }}
+        "gke-gcsfuse.csi.storage.gke.io/mount-volumes": "true"
+        {{- end }}
         ##
         ## This gets referenced in the etcd container's configuration as part of
         ## the DNS name. It must match the service name created for the etcd

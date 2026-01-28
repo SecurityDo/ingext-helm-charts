@@ -2,7 +2,7 @@
 set -e
 
 # --- 1. CONFIGURATION ---
-k8sProvider=aks
+k8sProvider=azure
 CLUSTER_NAME="azlake6"
 RESOURCE_GROUP="ingext-$CLUSTER_NAME-rg"
 LOCATION="eastus"

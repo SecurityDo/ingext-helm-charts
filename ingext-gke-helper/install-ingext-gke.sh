@@ -76,7 +76,7 @@ SKIP_GKE_CREATE=0
 VPC_NETWORK="${VPC_NETWORK:-}"
 SUBNET="${SUBNET:-}"
 
-k8sProvider=gke
+k8sProvider=gcp
 # -------- Parse arguments --------
 while [[ $# -gt 0 ]]; do
   case "$1" in

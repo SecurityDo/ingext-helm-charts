@@ -8,3 +8,7 @@ serviceAccount:
   
   # Azure Specific (The Client ID of your User Assigned Identity)
   # azureClientId: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+  # GCloud Specitic
+  # Google Service Account: iam.gke.io/gcp-service-account=$GSA_NAME@$PROJECT_ID.iam.gserviceaccount.com
+  # gcpServiceAccount: $GSA_NAME@$PROJECT_ID.iam.gserviceaccount.com
