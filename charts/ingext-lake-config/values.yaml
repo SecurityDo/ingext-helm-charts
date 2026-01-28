@@ -5,3 +5,5 @@ s3:
   region:
 blob:
   storageAccount:  
+gcs:
+  bucket:  
