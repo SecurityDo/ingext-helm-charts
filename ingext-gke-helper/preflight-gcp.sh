@@ -233,7 +233,7 @@ prompt() {
 # 2) Collect inputs
 prompt REGION "GCP region (example: us-east1, us-west1, europe-west1)" "us-east1"
 prompt CLUSTER_NAME "GKE cluster name" "ingextgke" "true"
-prompt NODE_COUNT "Node count per zone (regional cluster)" "2"
+prompt NODE_COUNT "Node count per zone (regional cluster)" "1"
 
 # Machine Type selection - show available types automatically
 echo ""
@@ -245,7 +245,7 @@ COMPUTE_API_ENABLED=$(gcloud services list --enabled --project="$PROJECT_ID" --f
 if [[ -z "$COMPUTE_API_ENABLED" ]]; then
   echo "Compute Engine API not enabled yet - skipping machine type lookup."
   echo "The installer will enable required APIs automatically."
-  echo "Using default machine type: e2-standard-4"
+  echo "Using default machine type: e2-standard-2"
   echo ""
   TABLE_OUTPUT=""
 else
