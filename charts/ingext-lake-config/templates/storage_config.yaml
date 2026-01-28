@@ -13,5 +13,8 @@ data:
       },
       "blob": {
         "storageAccount": "{{ .Values.blob.storageAccount }}"
+      },
+      "gcs": {
+        "bucket": "{{ .Values.gcs.bucket }}"
       }
     }
