@@ -29,13 +29,37 @@ export async function validateAwsAuth(
       ],
       remediation: [
         {
-          message: `If using SSO: run 'aws sso login --profile ${awsProfile}'`,
+          message: "💡 Preferred Fix: Use the Docker Shell",
         },
         {
-          message: `If using access keys: run 'aws configure --profile ${awsProfile}'`,
+          message: "   1. Start the Docker shell:",
         },
         {
-          message: `Verify your AWS credentials are valid and have not expired`,
+          message: "      ./lakehouse-aws/start-docker-shell.sh",
+        },
+        {
+          message: "      (This drops you into a container with all tools pre-installed)",
+        },
+        {
+          message: "   2. Run authentication inside that shell:",
+        },
+        {
+          message: `      aws configure --profile ${awsProfile}`,
+        },
+        {
+          message: "",
+        },
+        {
+          message: "Alternative (if running locally):",
+        },
+        {
+          message: `  - If using SSO: run 'aws sso login --profile ${awsProfile}'`,
+        },
+        {
+          message: `  - If using access keys: run 'aws configure --profile ${awsProfile}'`,
+        },
+        {
+          message: `  - Verify your AWS credentials are valid and have not expired`,
         },
       ],
     };

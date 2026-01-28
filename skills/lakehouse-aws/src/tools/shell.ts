@@ -26,30 +26,37 @@ export async function run(cmd: string, args: string[], env?: Record<string, stri
                          result.stderr.includes("asked for the client to provide credentials") ||
                          result.stderr.includes("Kubernetes cluster unreachable");
   
-  if (isK8sCommand && isUnauthorized && env?.CLUSTER_NAME && env?.AWS_REGION) {
-    process.stderr.write(`\n⚠️  Kubernetes credentials expired. Attempting to refresh kubeconfig for ${env.CLUSTER_NAME}...\n`);
-    
-    // Attempt to refresh kubeconfig
-    const refreshResult = await execCmd(EXEC_MODE, "aws", [
-      "eks", "update-kubeconfig", 
-      "--name", env.CLUSTER_NAME, 
-      "--region", env.AWS_REGION,
-      "--alias", env.CLUSTER_NAME
-    ], { env });
-    
-    if (refreshResult.code === 0) {
+  // Also retry on generic Helm/K8s connection timeouts
+  const isTimeout = result.stderr.includes("context deadline exceeded") ||
+                    result.stderr.includes("connection timed out") ||
+                    result.stderr.includes("request canceled");
+
+  if (isK8sCommand && (isUnauthorized || isTimeout) && env?.CLUSTER_NAME && env?.AWS_REGION) {
+    if (isUnauthorized) {
+      process.stderr.write(`\n⚠️  Kubernetes credentials expired. Attempting to refresh kubeconfig for ${env.CLUSTER_NAME}...\n`);
+      
+      // Attempt to refresh kubeconfig
+      await execCmd(EXEC_MODE, "aws", [
+        "eks", "update-kubeconfig", 
+        "--name", env.CLUSTER_NAME, 
+        "--region", env.AWS_REGION,
+        "--alias", env.CLUSTER_NAME
+      ], { env });
+      
       process.stderr.write(`✓ Kubeconfig refreshed. Retrying command...\n`);
-      // Retry the original command once
-      const retryResult = await execCmd(EXEC_MODE, cmd, args, { env });
-      return {
-        ok: retryResult.code === 0,
-        exitCode: retryResult.code,
-        stdout: retryResult.stdout,
-        stderr: retryResult.stderr,
-      };
     } else {
-      process.stderr.write(`❌ Failed to refresh kubeconfig: ${refreshResult.stderr.substring(0, 200)}\n`);
+      process.stderr.write(`\n⚠️  Kubernetes command timed out. Retrying in 5s...\n`);
+      await new Promise(resolve => setTimeout(resolve, 5000));
     }
+    
+    // Retry the original command once
+    const retryResult = await execCmd(EXEC_MODE, cmd, args, { env });
+    return {
+      ok: retryResult.code === 0,
+      exitCode: retryResult.code,
+      stdout: retryResult.stdout,
+      stderr: retryResult.stderr,
+    };
   }
 
   return {

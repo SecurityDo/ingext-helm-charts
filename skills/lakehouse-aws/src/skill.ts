@@ -111,15 +111,17 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
   const inputWithDomain = { ...input, siteDomain };
 
   // Check Route53 for domain ownership FIRST (before showing confirmation)
-  const route53Check = await findHostedZoneForDomain(input.rootDomain);
-  if (route53Check.ok && route53Check.zoneId) {
-    evidence.route53ZoneId = route53Check.zoneId;
-    evidence.route53ZoneName = route53Check.zoneName;
+  if (input.useAwsDns) {
+    const route53Check = await findHostedZoneForDomain(input.rootDomain);
+    if (route53Check.ok && route53Check.zoneId) {
+      evidence.route53ZoneId = route53Check.zoneId;
+      evidence.route53ZoneName = route53Check.zoneName;
+    }
   }
 
   // Discover or validate ACM certificate BEFORE confirmation
   let certArn = input.certArn;
-  if (!certArn) {
+  if (!certArn && input.useAwsCert) {
     const certSearch = await findCertificatesForDomain(siteDomain, input.awsRegion);
     
     if (certSearch.ok && certSearch.matches && certSearch.matches.length > 0) {
@@ -149,7 +151,7 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
         message: `Failed to query ACM: ${certSearch.error}`,
       });
     }
-  } else {
+  } else if (certArn && certArn !== "EXTERNAL") {
     // User provided cert ARN explicitly - validate it
     console.error(`⏳ Validating provided certificate: ${certArn}...`);
     const { describeCertificate } = await import("./tools/acm.js");
@@ -214,6 +216,11 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightResu
         console.error(`✓ Certificate validated: ${certDomain} (status: ${certStatus})`);
       }
     }
+  } else if (certArn === "EXTERNAL") {
+    console.error("ℹ️  Using external/manual certificate management.");
+    evidence.certArn = "EXTERNAL";
+    evidence.certDomain = "EXTERNAL";
+    evidence.certAutoDiscovered = false;
   }
 
   // NOW show domain confirmation with discovery results

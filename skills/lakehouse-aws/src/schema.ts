@@ -26,6 +26,8 @@ export const PreflightInputSchema = z.object({
   writeEnvFile: z.boolean().default(true),
   overwriteEnv: z.boolean().default(false),
   dnsCheck: z.boolean().default(true),
+  useAwsDns: z.boolean().default(true),
+  useAwsCert: z.boolean().default(true),
   approve: z.boolean().optional(), // If true, proceed with installation after preflight
   execMode: z.enum(["docker", "local"]).default("local"), // Execution mode: docker or local
   phase: z.enum(["foundation", "storage", "compute", "core", "stream", "datalake", "ingress", "all"]).optional().default("all"), // Target phase for installation

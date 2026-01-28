@@ -75,7 +75,13 @@ export async function waitForPodsReady(
     verbose?: boolean;
     description?: string;
   } = {}
-): Promise<{ ok: boolean; total: number; ready: number; error?: string }> {
+): Promise<{ 
+  ok: boolean; 
+  total: number; 
+  ready: number; 
+  notReadyPods: any[];
+  error?: string;
+}> {
   const maxWaitMinutes = options.maxWaitMinutes || 5;
   const maxWaitSeconds = maxWaitMinutes * 60;
   const pollIntervalSeconds = options.pollIntervalSeconds || 15;
@@ -84,9 +90,13 @@ export async function waitForPodsReady(
   
   const startTime = Date.now();
   let lastStatus = "";
+  let lastLogTime = 0;
+  let currentNotReadyPods: any[] = [];
   
   if (verbose) {
     console.error(`⏳ Waiting for ${description} to be Ready (max ${maxWaitMinutes} minutes)...`);
+    // Initial feedback using console.error to ensure it bypasses any buffering
+    console.error(`   [0m 0s elapsed, ${maxWaitMinutes}m 0s remaining] Initializing poll...`);
   }
   
   while (true) {
@@ -96,6 +106,7 @@ export async function waitForPodsReady(
         ok: false, 
         total: 0, 
         ready: 0, 
+        notReadyPods: currentNotReadyPods,
         error: `Timeout waiting for ${description} after ${maxWaitMinutes} minutes.` 
       };
     }
@@ -117,53 +128,93 @@ export async function waitForPodsReady(
           const phase = p.status?.phase;
           if (phase === "Succeeded" || phase === "Failed") return false;
           
+          // Exclude pods that are being deleted
+          if (p.metadata?.deletionTimestamp) return false;
+          
           // Exclude pods created by CronJobs (they are meant to complete/fail)
           const ownerRefs = p.metadata?.ownerReferences || [];
-          const isCronJobPod = ownerRefs.some((ref: any) => ref.kind === "Job" && p.metadata.name.includes("cronjob"));
+          const isCronJobPod = ownerRefs.some((ref: any) => ref.kind === "Job" && (p.metadata.name.includes("cronjob") || ref.name.includes("cronjob")));
           if (isCronJobPod) return false;
           
           return true;
         });
         
+        const elapsedMinutes = Math.floor(elapsed / 60);
+        const elapsedSeconds = elapsed % 60;
+        const remaining = Math.max(0, maxWaitSeconds - elapsed);
+        const remMinutes = Math.floor(remaining / 60);
+        const remSeconds = remaining % 60;
+        const timeStr = `[${elapsedMinutes}m ${elapsedSeconds}s elapsed, ${remMinutes}m ${remSeconds}s remaining]`;
+
         if (activePods.length === 0) {
-          // No active pods yet, wait
           if (verbose) {
-            const minutes = Math.floor(elapsed / 60);
-            const seconds = elapsed % 60;
-            process.stderr.write(`\r   [${minutes}m ${seconds}s] No active pods found yet, waiting...${" ".repeat(20)}`);
+            const msg = `   ${timeStr} No active pods found yet with selector '${options.labelSelector || "all"}', waiting...`;
+            if (process.stderr.isTTY) {
+              process.stderr.write(`\r${msg}${" ".repeat(20)}`);
+            } else {
+              console.error(msg);
+            }
           }
+          currentNotReadyPods = [];
         } else {
           let readyCount = 0;
-          const notReadyNames: string[] = [];
+          const notReadyPods: any[] = [];
           
           for (const pod of activePods) {
-            const containerStatuses = pod.status.containerStatuses || [];
             const readyCondition = pod.status?.conditions?.find((c: any) => c.type === "Ready");
             const isReady = readyCondition && readyCondition.status === "True";
             
             if (isReady) {
               readyCount++;
             } else {
-              notReadyNames.push(pod.metadata?.name || "unknown");
+              notReadyPods.push(pod);
             }
           }
           
+          currentNotReadyPods = notReadyPods;
           const statusSummary = `${readyCount}/${activePods.length} pods ready`;
-          if (verbose && statusSummary !== lastStatus) {
-            const minutes = Math.floor(elapsed / 60);
-            const seconds = elapsed % 60;
-            process.stderr.write(`\r   [${minutes}m ${seconds}s] ${statusSummary}. Waiting for: ${notReadyNames.slice(0, 2).join(", ")}${notReadyNames.length > 2 ? ` (+${notReadyNames.length-2})` : ""}${" ".repeat(20)}`);
+          
+          if (verbose) {
+            const notReadyNames = notReadyPods.map(p => p.metadata?.name || "unknown");
+            const waitingFor = notReadyNames.length > 0 
+              ? `. Waiting for: ${notReadyNames.slice(0, 2).join(", ")}${notReadyNames.length > 2 ? ` (+${notReadyNames.length-2})` : ""}`
+              : "";
+            const msg = `   ${timeStr} ${statusSummary}${waitingFor}`;
+            
+            const now = Date.now();
+            const shouldLog = statusSummary !== lastStatus || (now - lastLogTime) > 60000;
+
+            if (process.stderr.isTTY) {
+              process.stderr.write(`\r${msg}${" ".repeat(20)}`);
+            } else if (shouldLog) {
+              console.error(msg);
+              lastLogTime = now;
+            }
             lastStatus = statusSummary;
           }
           
           if (readyCount > 0 && readyCount === activePods.length) {
             if (verbose) {
-              process.stderr.write(`\n✓ All ${activePods.length} pods are Ready!\n`);
+              if (process.stderr.isTTY) process.stderr.write("\n");
+              console.error(`✓ All ${activePods.length} pods are Ready!`);
             }
-            return { ok: true, total: activePods.length, ready: readyCount };
+            return { ok: true, total: activePods.length, ready: readyCount, notReadyPods: [] };
           }
         }
-      } catch (e) { /* ignore parse errors */ }
+      } catch (e) {
+        if (verbose) console.error(`   ⚠️  Failed to parse Kubernetes response: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    } else {
+      if (verbose) {
+        const minutes = Math.floor(elapsed / 60);
+        const seconds = elapsed % 60;
+        const msg = `   [${minutes}m ${seconds}s] ⚠️  Kubernetes API call failed, retrying...`;
+        if (process.stderr.isTTY) {
+          process.stderr.write(`\r${msg}${" ".repeat(20)}`);
+        } else {
+          console.error(msg);
+        }
+      }
     }
     
     await new Promise(resolve => setTimeout(resolve, pollIntervalSeconds * 1000));

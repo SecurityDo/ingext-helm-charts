@@ -84,29 +84,40 @@ async function execPreflight(
   env: Record<string, string>,
   args: Record<string, any>
 ): Promise<number> {
-  const raw = {
-    awsProfile: args["profile"] || env.AWS_PROFILE || "default",
-    awsRegion: args["region"] || env.AWS_REGION || "us-east-2",
-    clusterName: args["cluster"] || env.CLUSTER_NAME || "ingext-lakehouse",
-    s3Bucket: args["bucket"] || env.S3_BUCKET,
-    rootDomain: args["root-domain"] || env.ROOT_DOMAIN,
-    siteDomain: args["domain"] || env.SITE_DOMAIN,
-    certArn: args["cert-arn"] || env.CERT_ARN,
-    namespace: args["namespace"] || env.NAMESPACE || "ingext",
-    nodeType: args["node-type"] || env.NODE_TYPE || "t3.xlarge",
-    nodeCount: args["node-count"] || env.NODE_COUNT || "2",
-    outputEnvPath: args["output-env"],
-    writeEnvFile: args["write-env"] !== "false",
-    overwriteEnv: args["overwrite-env"] === "true",
-    dnsCheck: args["dns-check"] !== "false",
-    approve: args["approve"] === "true",
-    execMode: args["exec"] === "docker" ? "docker" : "local",
-    readiness: {
-      hasBilling: args["has-billing"] !== "false",
-      hasAdmin: args["has-admin"] !== "false",
-      hasDns: args["has-dns"] !== "false",
-    },
-  };
+  let raw: any;
+
+  // If no arguments were passed (other than the command), run the wizard
+  // We check if keys other than 'namespace' (which might be defaulted) are present
+  const hasArgs = Object.keys(args).filter(k => k !== "namespace" && k !== "exec").length > 0;
+
+  if (!hasArgs && process.stdin.isTTY) {
+    const { execPreflightWizard } = await import("../src/tools/interactive-menu.js");
+    raw = await execPreflightWizard(env, args);
+  } else {
+    raw = {
+      awsProfile: args["profile"] || env.AWS_PROFILE || "default",
+      awsRegion: args["region"] || env.AWS_REGION || "us-east-2",
+      clusterName: args["cluster"] || env.CLUSTER_NAME || "ingext-lakehouse",
+      s3Bucket: args["bucket"] || env.S3_BUCKET,
+      rootDomain: args["root-domain"] || env.ROOT_DOMAIN,
+      siteDomain: args["domain"] || env.SITE_DOMAIN,
+      certArn: args["cert-arn"] || env.CERT_ARN,
+      namespace: args["namespace"] || env.NAMESPACE || "ingext",
+      nodeType: args["node-type"] || env.NODE_TYPE || "t3.xlarge",
+      nodeCount: args["node-count"] || env.NODE_COUNT || "2",
+      outputEnvPath: args["output-env"],
+      writeEnvFile: args["write-env"] !== "false",
+      overwriteEnv: args["overwrite-env"] === "true",
+      dnsCheck: args["dns-check"] !== "false",
+      approve: args["approve"] === "true",
+      execMode: args["exec"] === "docker" ? "docker" : "local",
+      readiness: {
+        hasBilling: args["has-billing"] !== "false",
+        hasAdmin: args["has-admin"] !== "false",
+        hasDns: args["has-dns"] !== "false",
+      },
+    };
+  }
 
   setExecMode(raw.execMode as "docker" | "local");
 
@@ -758,7 +769,7 @@ async function main() {
   
   // No env files - guide to preflight or run preflight
   if (envFiles.length === 0) {
-    if (!command || command === "preflight") {
+    if (command === "preflight") {
       // Allow preflight to run without env file
       return await executeCommand("preflight", {}, args);
     } else if (!command) {
@@ -823,6 +834,16 @@ async function main() {
 main()
   .then(code => process.exit(code))
   .catch(err => {
-    console.error("Fatal error:", err);
+    if (err.name === "ZodError") {
+      console.error("\n❌ Configuration Error:");
+      err.issues.forEach((issue: any) => {
+        const path = issue.path.join(".");
+        console.error(`   - ${path}: ${issue.message}`);
+      });
+      console.error("\n💡 Hint: Provide the required information via command line arguments.");
+      console.error("   Example: lakehouse preflight --root-domain example.com");
+    } else {
+      console.error("Fatal error:", err);
+    }
     process.exit(1);
   });

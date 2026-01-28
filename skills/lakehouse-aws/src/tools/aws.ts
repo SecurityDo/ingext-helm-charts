@@ -16,6 +16,15 @@ export async function getCallerIdentity(awsProfile: string, awsRegion: string) {
   }
 }
 
+/**
+ * List all available AWS profiles
+ */
+export async function listProfiles(): Promise<string[]> {
+  const res = await run("aws", ["configure", "list-profiles"]);
+  if (!res.ok) return [];
+  return res.stdout.trim().split("\n").filter(Boolean);
+}
+
 export async function headBucket(bucket: string, awsProfile: string, awsRegion: string) {
   const res = await aws(["s3api", "head-bucket", "--bucket", bucket], awsProfile, awsRegion);
   return { exists: res.ok, raw: res };
@@ -1523,7 +1532,10 @@ export async function waitForClusterActive(
     if (verbose) {
       const minutes = Math.floor(elapsed / 60);
       const seconds = elapsed % 60;
-      console.error(`   [Poll #${pollCount}] [${minutes}m ${seconds}s] Checking cluster status...`);
+      const remaining = Math.max(0, maxWaitSeconds - elapsed);
+      const remMinutes = Math.floor(remaining / 60);
+      const remSeconds = remaining % 60;
+      console.error(`   [Poll #${pollCount}] [${minutes}m ${seconds}s elapsed, ${remMinutes}m ${remSeconds}s remaining] Checking cluster status...`);
     }
     
     const statusCheck = await describeCluster(clusterName, awsProfile, awsRegion);

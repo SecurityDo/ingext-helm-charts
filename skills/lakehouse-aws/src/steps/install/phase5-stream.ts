@@ -1,6 +1,7 @@
 import { checkPlatformHealth } from "../../tools/platform.js";
 import { kubectl, waitForPodsReady } from "../../tools/kubectl.js";
 import { upgradeInstall, helm, isHelmLocked, waitForHelmReady } from "../../tools/helm.js";
+import { analyzeCrashLoop, captureNamespaceEvents, capturePodDiagnostics } from "../../tools/diagnostics.js";
 
 export type Phase5Evidence = {
   platform: {
@@ -36,120 +37,6 @@ export type Phase5Evidence = {
     }>;
   };
 };
-
-// Crash loop analyzer: detects common crash patterns and returns actionable blockers
-async function analyzeCrashLoop(
-  podName: string,
-  namespace: string,
-  env: Record<string, string>
-): Promise<{ code: string; message: string; remediation?: string } | null> {
-  // Get logs from previous crash (most informative)
-  const previousLogsResult = await kubectl(
-    ["logs", "-n", namespace, podName, "--all-containers", "--previous", "--tail=200"],
-    { AWS_PROFILE: env.AWS_PROFILE, AWS_REGION: env.AWS_REGION }
-  );
-
-  // Fallback to current logs if previous not available
-  const logsResult = previousLogsResult.ok
-    ? previousLogsResult
-    : await kubectl(
-        ["logs", "-n", namespace, podName, "--all-containers", "--tail=200"],
-        { AWS_PROFILE: env.AWS_PROFILE, AWS_REGION: env.AWS_REGION }
-      );
-
-  const logs = logsResult.ok ? logsResult.stdout : "";
-
-  // Pattern 1: RBAC permissions (secrets/configmaps forbidden)
-  if (
-    logs.includes("forbidden") &&
-    (logs.includes("secrets") || logs.includes("configmaps")) &&
-    logs.includes("cannot get resource")
-  ) {
-    const resourceMatch = logs.match(/cannot get resource "([^"]+)"/);
-    const resource = resourceMatch ? resourceMatch[1] : "secrets/configmaps";
-    
-    return {
-      code: "RBAC_MISSING_PERMISSIONS",
-      message: `Pod ${podName} cannot access ${resource} due to missing RBAC permissions. Service account needs Role/RoleBinding to read ${resource}.`,
-      remediation: `Install ingext-manager-role chart: helm upgrade --install ingext-manager-role oci://public.ecr.aws/ingext/ingext-manager-role -n ${namespace}`,
-    };
-  }
-
-  // Pattern 2: Connection refused / no such host (dependency unreachable)
-  if (
-    logs.includes("connection refused") ||
-    logs.includes("no such host") ||
-    logs.includes("dial tcp") ||
-    logs.includes("i/o timeout")
-  ) {
-    const serviceMatch = logs.match(/(?:connection refused|no such host|dial tcp).*?([a-z0-9-]+:[0-9]+|[a-z0-9-]+\.svc)/i);
-    const service = serviceMatch ? serviceMatch[1] : "unknown service";
-    
-    return {
-      code: "DEPENDENCY_UNREACHABLE",
-      message: `Pod ${podName} cannot reach dependency: ${service}. Check if the service exists and is ready.`,
-      remediation: `Check service: kubectl get svc -n ${namespace}\n  Check pods: kubectl get pods -n ${namespace} -o wide\n  Check DNS: kubectl run -it --rm debug --image=busybox --restart=Never -- nslookup ${service}`,
-    };
-  }
-
-  // Pattern 3: Missing environment variable
-  if (
-    logs.includes("missing env") ||
-    logs.includes("required environment variable") ||
-    logs.includes("environment variable") && logs.includes("not set")
-  ) {
-    const envMatch = logs.match(/(?:missing|required|not set).*?([A-Z_][A-Z0-9_]*)/i);
-    const envVar = envMatch ? envMatch[1] : "unknown variable";
-    
-    return {
-      code: "MISSING_ENV_VAR",
-      message: `Pod ${podName} requires environment variable that is not set: ${envVar}.`,
-      remediation: `Check ConfigMap/Secret: kubectl get cm,secret -n ${namespace}\n  Check pod env: kubectl describe pod ${podName} -n ${namespace} | grep -A 20 "Environment:"`,
-    };
-  }
-
-  // Pattern 4: Storage/PVC mount issues
-  if (
-    logs.includes("no space left") ||
-    logs.includes("PVC") ||
-    logs.includes("mount") && (logs.includes("failed") || logs.includes("error"))
-  ) {
-    return {
-      code: "STORAGE_MOUNT_FAILED",
-      message: `Pod ${podName} has storage mount issues. Check PVC status and node disk space.`,
-      remediation: `Check PVCs: kubectl get pvc -n ${namespace}\n  Check pod: kubectl describe pod ${podName} -n ${namespace} | grep -A 10 "Volumes:"\n  Check node disk: kubectl get nodes -o json | jq '.items[].status.conditions[] | select(.type=="DiskPressure")'`,
-    };
-  }
-
-  // Pattern 5: Panic / fatal error
-  if (logs.includes("panic:") || logs.includes("fatal error")) {
-    const panicMatch = logs.match(/panic: (.+?)(?:\n|$)/);
-    const panicMsg = panicMatch ? panicMatch[1].substring(0, 200) : "unknown panic";
-    
-    return {
-      code: "APPLICATION_PANIC",
-      message: `Pod ${podName} crashed with panic: ${panicMsg}`,
-      remediation: `Check full logs: kubectl logs -n ${namespace} ${podName} --all-containers --previous --tail=500\n  Check image version: kubectl describe pod ${podName} -n ${namespace} | grep Image:`,
-    };
-  }
-
-  // Pattern 6: Secret/ConfigMap not found (different from RBAC)
-  if (
-    (logs.includes("secrets") || logs.includes("configmaps")) &&
-    logs.includes("not found")
-  ) {
-    const resourceMatch = logs.match(/(?:secrets|configmaps) "([^"]+)" not found/);
-    const resource = resourceMatch ? resourceMatch[1] : "unknown";
-    
-    return {
-      code: "RESOURCE_NOT_FOUND",
-      message: `Pod ${podName} references ${resource} that does not exist.`,
-      remediation: `Check if resource exists: kubectl get secret,cm -n ${namespace}\n  Create if missing or check Helm chart values.`,
-    };
-  }
-
-  return null; // No pattern matched
-}
 
 export async function runPhase5Stream(
   env: Record<string, string>,
@@ -329,13 +216,14 @@ export async function runPhase5Stream(
     await waitForHelmReady("ingext-community", namespace, { AWS_PROFILE: env.AWS_PROFILE, AWS_REGION: env.AWS_REGION });
   }
 
+  // We remove --wait here to avoid the generic "context deadline exceeded" error
+  // and instead rely on our more diagnostic waitForPodsReady below.
   const communityResult = await helm(
     [
       "upgrade", "--install", "ingext-community",
       "oci://public.ecr.aws/ingext/ingext-community",
       "--namespace", namespace,
-      "--wait",
-      "--timeout", "15m"
+      // We removed --wait and --timeout 15m to handle the wait in a more robust way below
     ],
     { AWS_PROFILE: env.AWS_PROFILE, AWS_REGION: env.AWS_REGION }
   );
@@ -358,167 +246,75 @@ export async function runPhase5Stream(
     return { ok: false, evidence, blockers };
   }
 
-  // Step 4: Wait for pods to be ready (with diagnostics on timeout)
-  // Exclude Failed and Succeeded pods (e.g., cronjobs, init jobs)
-  const waitResult = await kubectl(
-    [
-      "wait",
-      "--for=condition=Ready",
-      "pods",
-      "--all",
-      "--field-selector=status.phase!=Failed,status.phase!=Succeeded",
-      "-n",
-      namespace,
-      "--timeout=900s",
-    ],
-    { AWS_PROFILE: env.AWS_PROFILE, AWS_REGION: env.AWS_REGION }
-  );
+  // Step 4: Wait for pods to be ready
+  if (verbose) console.error(`\n⏳ Waiting for application pods to be Ready (max 15 minutes)...`);
+  
+  const waitResult = await waitForPodsReady(namespace, env.AWS_PROFILE!, env.AWS_REGION!, {
+    maxWaitMinutes: 15,
+    verbose,
+    description: "Phase 5 (Stream) pods"
+  });
+
+  evidence.pods.ready = waitResult.ok;
+  evidence.pods.total = waitResult.total;
+  evidence.pods.readyCount = waitResult.ready;
 
   if (!waitResult.ok) {
     // Capture diagnostics
-    const podsCheck = await kubectl(
-      ["get", "pods", "-n", namespace, "-o", "wide"],
-      { AWS_PROFILE: env.AWS_PROFILE, AWS_REGION: env.AWS_REGION }
-    );
-
-    const podsData = podsCheck.ok
-      ? JSON.parse(podsCheck.stdout)
-      : { items: [] };
-    const pods = podsData.items || [];
-
-    evidence.pods.total = pods.length;
-    evidence.pods.readyCount = 0;
-    evidence.pods.notReady = [];
-
+    evidence.pods.eventsTail = await captureNamespaceEvents(namespace, env.AWS_PROFILE!, env.AWS_REGION!);
     evidence.pods.crashAnalysis = [];
-
-    for (const pod of pods) {
-      const readyCondition = pod.status?.conditions?.find(
-        (c: any) => c.type === "Ready"
-      );
+    
+    for (const pod of waitResult.notReadyPods) {
       const podName = pod.metadata?.name || "unknown";
       const podStatus = pod.status?.phase || "Unknown";
-      const waitingReason = pod.status?.containerStatuses?.[0]?.state?.waiting?.reason;
-      const terminatedReason = pod.status?.containerStatuses?.[0]?.state?.terminated?.reason;
       
-      if (readyCondition && readyCondition.status === "True") {
-        evidence.pods.readyCount++;
-      } else {
-        evidence.pods.notReady.push({
-          name: podName,
-          status: podStatus,
-          reason:
-            readyCondition?.reason ||
-            waitingReason ||
-            terminatedReason,
+      const crashAnalysis = await analyzeCrashLoop(podName, namespace, { AWS_PROFILE: env.AWS_PROFILE, AWS_REGION: env.AWS_REGION });
+      
+      if (crashAnalysis) {
+        // Self-healing: if RBAC failed, kick the pod once
+        if (crashAnalysis.code === "RBAC_MISSING_PERMISSIONS" && options.force !== true) {
+          if (verbose) console.error(`   Attempting self-healing: kicking pod ${podName} due to RBAC issue...`);
+          await kubectl(["delete", "pod", podName, "-n", namespace], { AWS_PROFILE: env.AWS_PROFILE!, AWS_REGION: env.AWS_REGION! });
+          // Wait a bit for restart
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+
+        evidence.pods.crashAnalysis.push({
+          podName,
+          ...crashAnalysis
         });
-
-        // Run crash analyzer for CrashLoopBackOff pods
-        if (podStatus === "CrashLoopBackOff" || waitingReason === "CrashLoopBackOff") {
-          const analysis = await analyzeCrashLoop(podName, namespace, env);
-          if (analysis) {
-            evidence.pods.crashAnalysis.push({
-              podName,
-              code: analysis.code,
-              message: analysis.message,
-              remediation: analysis.remediation,
-            });
-            
-            blockers.push({
-              code: analysis.code,
-              message: `${analysis.message}${analysis.remediation ? `\n\nRemediation:\n${analysis.remediation}` : ""}`,
-            });
-          }
-        }
+        
+        blockers.push({
+          code: crashAnalysis.code,
+          message: `${crashAnalysis.message}${crashAnalysis.remediation ? `\n\nRemediation:\n${crashAnalysis.remediation}` : ""}`,
+        });
+      } else {
+        const podDiag = await capturePodDiagnostics(podName, namespace, env.AWS_PROFILE!, env.AWS_REGION!);
+        blockers.push({
+          code: "POD_NOT_READY",
+          message: `Pod ${podName} is not ready (${podStatus}).\n\nRecent events:\n${podDiag.events.split("\n").slice(0, 10).join("\n")}`,
+        });
       }
+
+      evidence.pods.notReady.push({
+        name: podName,
+        status: podStatus,
+        reason: pod.status?.conditions?.find((c: any) => c.type === "Ready")?.reason
+      });
     }
 
-    // Get events for diagnostics
-    const eventsResult = await kubectl(
-      ["get", "events", "-n", namespace, "--sort-by=.lastTimestamp", "-o", "json"],
-      { AWS_PROFILE: env.AWS_PROFILE, AWS_REGION: env.AWS_REGION }
-    );
-    if (eventsResult.ok) {
-      try {
-        const eventsData = JSON.parse(eventsResult.stdout);
-        const events = eventsData.items || [];
-        evidence.pods.eventsTail = events
-          .slice(-25)
-          .map((e: any) => `${e.lastTimestamp || ""} ${e.type || ""} ${e.reason || ""} ${e.message || ""}`)
-          .join("\n");
-      } catch (e) {
-        // Ignore parse errors
-      }
+    if (blockers.length === 0) {
+      blockers.push({
+        code: "PODS_NOT_READY",
+        message: `Timeout waiting for pods to be ready in namespace ${namespace}.`,
+      });
     }
-
-    // Get describe output for not-ready pods (limit to 3 worst offenders)
-    const notReadyPods = evidence.pods.notReady.slice(0, 3);
-    for (const pod of notReadyPods) {
-      const describeResult = await kubectl(
-        ["describe", "pod", pod.name, "-n", namespace],
-        { AWS_PROFILE: env.AWS_PROFILE, AWS_REGION: env.AWS_REGION }
-      );
-      if (describeResult.ok) {
-        // Extract relevant sections (Events, Conditions)
-        const describeLines = describeResult.stdout.split("\n");
-        const eventsStart = describeLines.findIndex((l) =>
-          l.includes("Events:")
-        );
-        const conditionsStart = describeLines.findIndex((l) =>
-          l.includes("Conditions:")
-        );
-
-        let relevantOutput = "";
-        if (conditionsStart >= 0) {
-          relevantOutput +=
-            describeLines.slice(conditionsStart, eventsStart >= 0 ? eventsStart : undefined).join("\n") + "\n";
-        }
-        if (eventsStart >= 0) {
-          relevantOutput += describeLines.slice(eventsStart, eventsStart + 20).join("\n");
-        }
-
-        pod.reason = (pod.reason || "") + "\n\nPod Details:\n" + relevantOutput.substring(0, 500);
-      }
-    }
-
-    blockers.push({
-      code: "PODS_NOT_READY",
-      message: `Not all pods in namespace '${namespace}' are ready after 15 minutes. ${evidence.pods.readyCount}/${evidence.pods.total} pods ready. Not ready: ${evidence.pods.notReady.map((p) => p.name).join(", ")}.${evidence.pods.eventsTail ? `\n\nRecent events:\n${evidence.pods.eventsTail}` : ""}\n\nTo diagnose:\n  kubectl get pods -n ${namespace} -o wide\n  kubectl describe pod <pod-name> -n ${namespace}\n  kubectl get events -n ${namespace} --sort-by=.lastTimestamp | tail -n 25`,
-    });
 
     return { ok: false, evidence, blockers };
   }
 
-  // All pods are ready
-  const finalPodsCheck = await kubectl(
-    ["get", "pods", "-n", namespace, "-o", "json"],
-    { AWS_PROFILE: env.AWS_PROFILE, AWS_REGION: env.AWS_REGION }
-  );
-
-  if (finalPodsCheck.ok) {
-    try {
-      const podsData = JSON.parse(finalPodsCheck.stdout);
-      const pods = podsData.items || [];
-      evidence.pods.total = pods.length;
-      evidence.pods.readyCount = 0;
-
-      for (const pod of pods) {
-        const readyCondition = pod.status?.conditions?.find(
-          (c: any) => c.type === "Ready"
-        );
-        if (readyCondition && readyCondition.status === "True") {
-          evidence.pods.readyCount++;
-        }
-      }
-
-      evidence.pods.ready = evidence.pods.readyCount === evidence.pods.total;
-    } catch (e) {
-      // Ignore parse errors
-    }
-  }
-
   return {
-    ok: blockers.length === 0,
+    ok: blockers.length === 0 && evidence.pods.ready,
     evidence,
     blockers,
   };

@@ -1,7 +1,7 @@
 import { getCluster, createCluster, createNodegroup, createAddon, createPodIdentityAssociation, deleteCluster } from "../../tools/eksctl.js";
 import { upgradeInstall } from "../../tools/helm.js";
 import { aws, waitForClusterActive, describeCluster, listCloudFormationStacks, deleteCloudFormationStack, waitForStacksDeleted, describeCloudFormationStack } from "../../tools/aws.js";
-import { getNodes, kubectl } from "../../tools/kubectl.js";
+import { getNodes, kubectl, waitForPodsReady } from "../../tools/kubectl.js";
 import { getRole, createRole, attachPolicy } from "../../tools/iam.js";
 
 // Import helper functions for subnet dependency checking
@@ -972,9 +972,28 @@ export async function runPhase1Foundation(env: Record<string, string>, options?:
   }
 
   // 7. Install addon: eks-pod-identity-agent
+  if (verbose) console.error(`   Installing eks-pod-identity-agent...`);
   const podIdentityAddon = await createAddon(clusterName, "eks-pod-identity-agent", region, profile);
   if (podIdentityAddon.ok) {
     evidence.eks.addonsInstalled.push("eks-pod-identity-agent");
+    if (verbose) console.error(`   ✓ eks-pod-identity-agent installed`);
+    
+    // CRITICAL: Wait for Pod Identity Agent to be ready before proceeding
+    // This agent is required for subsequent addons (like EBS CSI) to authenticate correctly
+    if (verbose) console.error(`   ⏳ Waiting for eks-pod-identity-agent to be ready...`);
+    const agentWait = await waitForPodsReady("kube-system", profile, region, {
+      labelSelector: "app.kubernetes.io/name=eks-pod-identity-agent",
+      maxWaitMinutes: 5,
+      description: "eks-pod-identity-agent pods",
+      verbose
+    });
+    
+    if (!agentWait.ok) {
+      if (verbose) console.error(`   ⚠️  eks-pod-identity-agent is taking longer than expected to start.`);
+      // We don't block yet, but subsequent steps might fail if the agent isn't ready
+    }
+  } else if (verbose) {
+    console.error(`   ⚠️  eks-pod-identity-agent may already exist`);
   }
 
   // 8. Install EBS CSI Driver addon FIRST (this creates the service account)
@@ -987,74 +1006,79 @@ export async function runPhase1Foundation(env: Record<string, string>, options?:
     if (verbose) console.error(`⚠️  EBS CSI driver addon may already exist`);
   }
 
-  // 9. Create IAM role for EBS CSI driver
-  if (verbose) console.error(`⏳ Creating IAM role for EBS CSI driver...`);
-  
-  const ebsRoleName = `AmazonEKS_EBS_CSI_DriverRole_${clusterName}`;
-  
-  // First check if role exists
-  const roleCheck = await getRole(ebsRoleName, profile);
-  
-  if (!roleCheck.ok) {
-    // Role doesn't exist, create it
-    // Get AWS account ID for the trust policy
-    const { getAccountId } = await import("../../tools/iam.js");
-    const accountId = await getAccountId(profile, region);
-    
-    if (!accountId) {
-      if (verbose) console.error(`❌ Failed to get AWS account ID`);
-      blockers.push({
-        code: "AWS_ACCOUNT_ID_FAILED",
-        message: "Failed to get AWS account ID for IAM role creation",
-      });
-      return { ok: false, evidence, blockers };
-    }
-    
-    // Create trust policy for pod identity
-    const trustPolicy = {
-      Version: "2012-10-17",
-      Statement: [
-        {
-          Effect: "Allow",
-          Principal: {
-            Service: "pods.eks.amazonaws.com"
-          },
-          Action: [
-            "sts:AssumeRole",
-            "sts:TagSession"
-          ]
-        }
-      ]
-    };
-    
-    const roleResult = await createRole(
-      ebsRoleName,
-      JSON.stringify(trustPolicy),
-      profile
-    );
-    
-    if (!roleResult.ok && !roleResult.stderr.includes("EntityAlreadyExists")) {
-      if (verbose) console.error(`⚠️  Failed to create EBS CSI driver role: ${roleResult.stderr.substring(0, 200)}`);
-      // Continue anyway - maybe role exists but getRole failed
-    } else {
-      if (verbose) console.error(`✓ Created IAM role: ${ebsRoleName}`);
-    }
-    
-    // Attach the EBS CSI Driver policy
-    const policyArn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy";
-    const attachResult = await attachPolicy(ebsRoleName, policyArn, profile);
-    
-    if (!attachResult.ok && !attachResult.stderr.includes("already attached")) {
-      if (verbose) console.error(`⚠️  Failed to attach policy to role: ${attachResult.stderr.substring(0, 200)}`);
-    } else {
-      if (verbose) console.error(`✓ Attached policy: AmazonEBSCSIDriverPolicy`);
-    }
+  // 8b. Install S3 CSI Driver (Mountpoint) addon
+  if (verbose) console.error(`⏳ Installing S3 CSI driver (Mountpoint) addon...`);
+  const s3CsiAddon = await createAddon(clusterName, "aws-mountpoint-s3-csi-driver", region, profile);
+  if (s3CsiAddon.ok) {
+    evidence.eks.addonsInstalled.push("aws-mountpoint-s3-csi-driver");
+    if (verbose) console.error(`✓ S3 CSI driver addon installed`);
   } else {
-    if (verbose) console.error(`✓ IAM role already exists: ${ebsRoleName}`);
+    if (verbose) console.error(`⚠️  S3 CSI driver addon may already exist`);
   }
 
-  // 10. NOW create pod identity association (service account exists now)
-  if (verbose) console.error(`⏳ Creating pod identity association for EBS CSI driver...`);
+  // 9. Create IAM role for EBS CSI driver
+  if (verbose) console.error(`⏳ Creating IAM roles for CSI drivers...`);
+  
+  const ebsRoleName = `AmazonEKS_EBS_CSI_DriverRole_${clusterName}`;
+  const s3RoleName = `AmazonEKS_S3_CSI_DriverRole_${clusterName}`;
+  
+  const ebsRoleCheck = await getRole(ebsRoleName, profile);
+  const s3RoleCheck = await getRole(s3RoleName, profile);
+  
+  // Get AWS account ID for the trust policy (if needed for either role)
+  let accountId = "";
+  if (!ebsRoleCheck.ok || !s3RoleCheck.ok) {
+    const { getAccountId } = await import("../../tools/iam.js");
+    accountId = await getAccountId(profile, region) || "";
+  }
+
+  const trustPolicy = {
+    Version: "2012-10-17",
+    Statement: [
+      {
+        Effect: "Allow",
+        Principal: {
+          Service: "pods.eks.amazonaws.com"
+        },
+        Action: [
+          "sts:AssumeRole",
+          "sts:TagSession"
+        ]
+      }
+    ]
+  };
+
+  // Setup EBS Role
+  if (!ebsRoleCheck.ok) {
+    if (verbose) console.error(`   Creating EBS CSI driver role...`);
+    const roleResult = await createRole(ebsRoleName, JSON.stringify(trustPolicy), profile);
+    if (roleResult.ok || roleResult.stderr.includes("EntityAlreadyExists")) {
+      const policyArn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy";
+      await attachPolicy(ebsRoleName, policyArn, profile);
+      if (verbose) console.error(`   ✓ EBS CSI role created and policy attached`);
+    }
+  } else {
+    if (verbose) console.error(`   ✓ EBS CSI role already exists`);
+  }
+
+  // Setup S3 Role
+  if (!s3RoleCheck.ok) {
+    if (verbose) console.error(`   Creating S3 CSI driver role...`);
+    const roleResult = await createRole(s3RoleName, JSON.stringify(trustPolicy), profile);
+    if (roleResult.ok || roleResult.stderr.includes("EntityAlreadyExists")) {
+      // Use FullAccess as fallback if scoped policy not found
+      const policyArn = "arn:aws:iam::aws:policy/AmazonS3FullAccess";
+      await attachPolicy(s3RoleName, policyArn, profile);
+      if (verbose) console.error(`   ✓ S3 CSI role created and policy attached`);
+    }
+  } else {
+    if (verbose) console.error(`   ✓ S3 CSI role already exists`);
+  }
+
+  // 10. create pod identity associations
+  if (verbose) console.error(`⏳ Creating pod identity associations for CSI drivers...`);
+  
+  // EBS association
   const ebsPodIdentity = await createPodIdentityAssociation({
     cluster: clusterName,
     namespace: "kube-system",
@@ -1064,65 +1088,114 @@ export async function runPhase1Foundation(env: Record<string, string>, options?:
     region,
     profile,
   });
+
+  // S3 associations (Both controller and node need S3 access)
+  const s3ControllerPodIdentity = await createPodIdentityAssociation({
+    cluster: clusterName,
+    namespace: "kube-system",
+    serviceAccountName: "s3-csi-driver-controller-sa",
+    roleName: s3RoleName,
+    permissionPolicyArns: "arn:aws:iam::aws:policy/AmazonS3FullAccess",
+    region,
+    profile,
+  });
+
+  const s3NodePodIdentity = await createPodIdentityAssociation({
+    cluster: clusterName,
+    namespace: "kube-system",
+    serviceAccountName: "s3-csi-driver-sa",
+    roleName: s3RoleName,
+    permissionPolicyArns: "arn:aws:iam::aws:policy/AmazonS3FullAccess",
+    region,
+    profile,
+  });
   
-  // Verify association exists
+  // Verify associations exist
   const associationCheck = await aws(
     ["eks", "list-pod-identity-associations", "--cluster-name", clusterName, "--region", region],
     profile,
     region
   );
   
-  let associationFound = false;
+  let ebsAssocFound = false;
+  let s3ControllerAssocFound = false;
+  let s3NodeAssocFound = false;
   if (associationCheck.ok) {
     try {
       const data = JSON.parse(associationCheck.stdout);
-      associationFound = data.associations?.some((a: any) => 
+      ebsAssocFound = data.associations?.some((a: any) => 
         a.namespace === "kube-system" && a.serviceAccount === "ebs-csi-controller-sa"
+      );
+      s3ControllerAssocFound = data.associations?.some((a: any) => 
+        a.namespace === "kube-system" && a.serviceAccount === "s3-csi-driver-controller-sa"
+      );
+      s3NodeAssocFound = data.associations?.some((a: any) => 
+        a.namespace === "kube-system" && a.serviceAccount === "s3-csi-driver-sa"
       );
     } catch (e) { /* ignore */ }
   }
 
-  if (ebsPodIdentity.ok || associationFound) {
-    if (verbose) console.error(`✓ Pod identity association verified`);
+  const s3Ok = (s3ControllerPodIdentity.ok || s3ControllerAssocFound) && (s3NodePodIdentity.ok || s3NodeAssocFound);
+
+  if ((ebsPodIdentity.ok || ebsAssocFound) && s3Ok) {
+    if (verbose) console.error(`✓ CSI pod identity associations verified`);
     
-    // 11. Restart EBS CSI controller pods to pick up the new IAM role
-    if (verbose) console.error(`⏳ Restarting EBS CSI controller pods to apply new IAM role...`);
-    const restartResult = await kubectl(
+    // CRITICAL: Wait for IAM and Pod Identity to propagate
+    if (verbose) console.error(`⏳ Waiting 30s for IAM and Pod Identity propagation...`);
+    await new Promise(resolve => setTimeout(resolve, 30000));
+    
+    // 11. Restart CSI controller pods to pick up the new IAM roles
+    if (verbose) console.error(`⏳ Restarting CSI controller pods to apply new IAM roles...`);
+    await kubectl(
       ["delete", "pods", "-n", "kube-system", "-l", "app=ebs-csi-controller"],
+      { AWS_PROFILE: profile, AWS_REGION: region }
+    );
+    await kubectl(
+      ["delete", "pods", "-n", "kube-system", "-l", "app.kubernetes.io/name=aws-mountpoint-s3-csi-driver"],
       { AWS_PROFILE: profile, AWS_REGION: region }
     );
     
     if (verbose) console.error(`✓ Controller pods restarted`);
     
-    // Wait for new pods to start and verify health
-    if (verbose) console.error(`⏳ Waiting for EBS CSI controllers to stabilize...`);
-    let healthy = false;
-    for (let i = 0; i < 5; i++) {
-      await new Promise(resolve => setTimeout(resolve, 15000));
-      const healthCheck = await kubectl(
-        ["get", "pods", "-n", "kube-system", "-l", "app.kubernetes.io/name=aws-ebs-csi-driver,app.kubernetes.io/component=csi-controller", "-o", "json"],
-        { AWS_PROFILE: profile, AWS_REGION: region }
-      );
-      if (healthCheck.ok) {
-        try {
-          const podsData = JSON.parse(healthCheck.stdout);
-          const pods = podsData.items || [];
-          if (pods.length > 0 && pods.every((p: any) => p.status.phase === "Running")) {
-            healthy = true;
-            break;
-          }
-        } catch (e) { /* ignore */ }
-      }
-    }
+    // Wait for new pods to be ready
+    if (verbose) console.error(`⏳ Waiting for CSI controllers to become Ready...`);
+    const ebsCsiWait = await waitForPodsReady("kube-system", profile, region, {
+      labelSelector: "app=ebs-csi-controller",
+      maxWaitMinutes: 15,
+      description: "EBS CSI controller pods",
+      verbose
+    });
+
+    const s3CsiWait = await waitForPodsReady("kube-system", profile, region, {
+      labelSelector: "app.kubernetes.io/name=aws-mountpoint-s3-csi-driver",
+      maxWaitMinutes: 10,
+      description: "S3 CSI driver pods",
+      verbose
+    });
     
-    if (healthy) {
-      if (verbose) console.error(`✓ EBS CSI driver is healthy`);
+    if (ebsCsiWait.ok && s3CsiWait.ok) {
+      if (verbose) console.error(`✓ Both CSI drivers are healthy and ready`);
     } else {
-      if (verbose) console.error(`⚠️  EBS CSI driver still stabilizing...`);
+      // ... existing error logic but updated for both
+      const errorMsg = `CSI drivers did not become ready. Stateful services will fail to start.\n` +
+                      (!ebsCsiWait.ok ? `❌ EBS CSI Error: ${ebsCsiWait.error}\n` : "") +
+                      (!s3CsiWait.ok ? `❌ S3 CSI Error: ${s3CsiWait.error}\n` : "");
+      
+      if (verbose) console.error(`\n❌ ${errorMsg}`);
+      blockers.push({
+        code: "CSI_DRIVERS_NOT_READY",
+        message: errorMsg,
+      });
+      return { ok: false, evidence, blockers };
     }
   } else {
-    const errorMsg = ebsPodIdentity.raw?.stderr || "Unknown error";
-    if (verbose) console.error(`⚠️  Failed to create pod identity association: ${errorMsg.substring(0, 200)}`);
+    const errorMsg = `Failed to associate IAM role with EBS CSI driver: ${ebsPodIdentity.raw?.stderr || "Unknown error"}`;
+    if (verbose) console.error(`❌ ${errorMsg}`);
+    blockers.push({
+      code: "EBS_CSI_IDENTITY_FAILED",
+      message: errorMsg,
+    });
+    return { ok: false, evidence, blockers };
   }
 
   // 12. Install StorageClass via Helm
@@ -1134,78 +1207,29 @@ export async function runPhase1Foundation(env: Record<string, string>, options?:
     { "storageClass.isDefaultClass": "true" },
     { AWS_PROFILE: profile, AWS_REGION: region }
   );
-  evidence.eks.storageClassInstalled = storageClassResult.ok;
+  
   if (!storageClassResult.ok) {
     if (verbose) {
-      console.error(`⚠️  StorageClass installation failed (non-blocking): ${storageClassResult.stderr.substring(0, 200)}`);
-      console.error(`   This may be due to ECR authentication. Continuing with installation...`);
+      console.error(`⚠️  StorageClass installation failed: ${storageClassResult.stderr.substring(0, 200)}`);
     }
-    // Don't block on StorageClass - it's not critical for subsequent phases
-    // The default gp2 storage class will work, or user can install manually later
-  } else if (verbose) {
-    console.error(`✓ StorageClass installed`);
+    // Don't block phase completion yet, but note it in evidence
+    evidence.eks.storageClassInstalled = false;
+  } else {
+    evidence.eks.storageClassInstalled = true;
+    if (verbose) console.error(`✓ GP3 StorageClass installed`);
   }
 
-  // 11. Install addon: aws-mountpoint-s3-csi-driver (via AWS CLI, not eksctl)
-  if (verbose) console.error(`   Installing aws-mountpoint-s3-csi-driver...`);
-  const s3CsiResult = await aws(
-    ["eks", "create-addon", "--cluster-name", clusterName, "--addon-name", "aws-mountpoint-s3-csi-driver", "--region", region],
-    profile,
-    region
-  );
-  // Ignore errors if already exists (idempotency)
-  if (s3CsiResult.ok || s3CsiResult.stderr.includes("already exists")) {
-    evidence.eks.addonsInstalled.push("aws-mountpoint-s3-csi-driver");
-    if (verbose) console.error(`   ✓ aws-mountpoint-s3-csi-driver installed`);
-  } else if (verbose) {
-    console.error(`   ⚠️  aws-mountpoint-s3-csi-driver may already exist`);
-  }
-
-  // 12. Verify critical addon health (EBS CSI Driver)
-  if (verbose) console.error(`\n⏳ Verifying EBS CSI driver health...`);
-  const ebsHealthCheck = await kubectl(
-    ["get", "pods", "-n", "kube-system", "-l", "app.kubernetes.io/name=aws-ebs-csi-driver", "-o", "json"],
-    { AWS_PROFILE: profile, AWS_REGION: region }
-  );
-
-  if (ebsHealthCheck.ok) {
-    try {
-      const podsData = JSON.parse(ebsHealthCheck.stdout);
-      const pods = podsData.items || [];
-      const controllerPods = pods.filter((p: any) => p.metadata?.name?.includes("ebs-csi-controller"));
-      const crashLoopPods = controllerPods.filter((p: any) => 
-        p.status?.containerStatuses?.some((s: any) => s.state?.waiting?.reason === "CrashLoopBackOff" || s.state?.waiting?.reason === "Error")
-      );
-
-      if (crashLoopPods.length > 0) {
-        const podName = crashLoopPods[0].metadata?.name || "unknown";
-        const errorMsg = `EBS CSI driver is in CrashLoopBackOff or Error state. Stateful services will fail to start.\n\n` +
-                        `Common causes:\n` +
-                        `  1. IAM role permissions are incorrect\n` +
-                        `  2. Pod identity association failed\n\n` +
-                        `To debug: kubectl describe pod ${podName} -n kube-system`;
-        if (verbose) console.error(`\n❌ ${errorMsg}`);
-        blockers.push({
-          code: "EBS_CSI_DRIVER_UNHEALTHY",
-          message: errorMsg,
-        });
-      } else if (controllerPods.length === 0) {
-        if (verbose) console.error(`⚠️  EBS CSI driver controller pods not found.`);
-        // Don't block yet, maybe they're just starting
-      } else {
-        const allReady = controllerPods.every((p: any) => 
-          p.status?.phase === "Running" && 
-          p.status?.containerStatuses?.every((s: any) => s.ready)
-        );
-        if (allReady) {
-          if (verbose) console.error(`✓ EBS CSI driver is healthy`);
-        } else {
-          if (verbose) console.error(`⚠️  EBS CSI driver is still starting...`);
-        }
-      }
-    } catch (e) {
-      if (verbose) console.error(`⚠️  Error parsing EBS CSI driver health check: ${e}`);
-    }
+  // 13. Verify StorageClass is actually working (Robustness Check)
+  if (verbose) console.error(`⏳ Verifying StorageClass availability...`);
+  const scVerify = await kubectl(["get", "sc", "gp3"], { AWS_PROFILE: profile, AWS_REGION: region });
+  if (!scVerify.ok) {
+    const errorMsg = "GP3 StorageClass was not found after installation. Subsequent phases (Storage, Stream, Datalake) will fail.";
+    if (verbose) console.error(`❌ ${errorMsg}`);
+    blockers.push({
+      code: "STORAGE_CLASS_MISSING",
+      message: errorMsg,
+    });
+    return { ok: false, evidence, blockers };
   }
 
   return {

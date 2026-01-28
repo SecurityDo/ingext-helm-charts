@@ -276,8 +276,29 @@ export async function runPhase7Ingress(
 
     if (installResult.ok) {
       evidence.albController.installed = true;
-      evidence.albController.ready = true;
-      if (verbose) console.error("✓ AWS Load Balancer Controller installed successfully");
+      
+      // CRITICAL: Wait for ALB controller to be READY before moving to Ingress installation
+      if (verbose) console.error("   ⏳ Waiting for aws-load-balancer-controller to be Ready (max 15 minutes)...");
+      const albWait = await waitForPodsReady("kube-system", profile, region, {
+        labelSelector: "app.kubernetes.io/name=aws-load-balancer-controller",
+        maxWaitMinutes: 15,
+        description: "AWS Load Balancer Controller pods",
+        verbose
+      });
+      
+      if (albWait.ok) {
+        evidence.albController.ready = true;
+        if (verbose) console.error("✓ AWS Load Balancer Controller is healthy and ready");
+      } else {
+        const errorMsg = "AWS Load Balancer Controller did not become ready within 15 minutes. Ingress creation will fail or hang.";
+        if (verbose) console.error(`❌ ${errorMsg}`);
+        blockers.push({
+          code: "ALB_CONTROLLER_NOT_READY",
+          message: errorMsg,
+          remediation: "Check logs: kubectl logs -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller",
+        });
+        return { ok: false, evidence, blockers };
+      }
     } else {
       blockers.push({
         code: "ALB_CONTROLLER_INSTALL_FAILED",

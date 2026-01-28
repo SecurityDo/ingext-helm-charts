@@ -2,7 +2,7 @@ import { headBucket, aws } from "../../tools/aws.js";
 import { createBucket } from "../../tools/s3.js";
 import { createPolicy, getAccountId } from "../../tools/iam.js";
 import { createPodIdentityAssociation } from "../../tools/eksctl.js";
-import { kubectl } from "../../tools/kubectl.js";
+import { kubectl, waitForPodsReady } from "../../tools/kubectl.js";
 
 export type Phase2Evidence = {
   s3: {
@@ -45,6 +45,35 @@ export async function runPhase2Storage(env: Record<string, string>, options?: { 
   const serviceAccountName = `${namespace}-sa`;
   const policyName = `ingext_${namespace}_S3_Policy_${clusterName}`;
   const roleName = `ingext_${serviceAccountName}_${clusterName}`;
+
+  // ============================================================
+  // Gate: Foundation Health (Verify Phase 1)
+  // ============================================================
+  if (verbose) console.error(`\n⏳ Verifying foundation health (Phase 1)...`);
+  
+  // Wait for eks-pod-identity-agent to be ready
+  // During reruns, we set maxWaitMinutes to 0.5 (30s) if we think it's already there
+  const foundationWait = await waitForPodsReady("kube-system", profile, region, {
+    labelSelector: "app.kubernetes.io/name=eks-pod-identity-agent",
+    maxWaitMinutes: 3,
+    description: "eks-pod-identity-agent pods",
+    verbose,
+    pollIntervalSeconds: 5, // Faster polling for foundation check
+  });
+
+  if (!foundationWait.ok) {
+    const errorMsg = "Foundation health check failed: eks-pod-identity-agent is not ready. Storage setup will likely fail.";
+    if (verbose) console.error(`❌ ${errorMsg}`);
+    blockers.push({
+      code: "FOUNDATION_NOT_READY",
+      message: errorMsg,
+    });
+    return { ok: false, evidence: {
+      s3: { bucketName, existed: false, created: false, region },
+      iam: { policyName, policyArn: "", policyExisted: false, policyCreated: false, roleName },
+      kubernetes: { namespaceExisted: false, namespaceCreated: false, serviceAccountName, serviceAccountCreated: false, podIdentityAssociated: false },
+    }, blockers };
+  }
 
   const evidence: Phase2Evidence = {
     s3: {

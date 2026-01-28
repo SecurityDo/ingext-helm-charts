@@ -1,7 +1,9 @@
 import { checkPlatformHealth } from "../../tools/platform.js";
 import { checkKarpenterInstalled, checkKarpenterReady } from "../../tools/karpenter.js";
-import { kubectl, getPodEvents } from "../../tools/kubectl.js";
+import { kubectl } from "../../tools/kubectl.js";
+import { waitForPodsReady } from "../../tools/kubectl.js";
 import { helm, upgradeInstall, waitForHelmReady, isHelmLocked } from "../../tools/helm.js";
+import { analyzeCrashLoop, captureNamespaceEvents, capturePodDiagnostics } from "../../tools/diagnostics.js";
 
 export type Phase4Evidence = {
   platform: {
@@ -279,16 +281,17 @@ export async function runPhase4CoreServices(
     await waitForHelmReady("ingext-manager-role", namespace, { AWS_PROFILE: profile, AWS_REGION: region });
   }
 
-  const managerRoleResult = await helm(
-    [
-      "upgrade", "--install", "ingext-manager-role",
-      "oci://public.ecr.aws/ingext/ingext-manager-role",
-      "--namespace", namespace,
-      "--wait",
-      "--timeout", "5m"
-    ],
-    { AWS_PROFILE: profile, AWS_REGION: region }
-  );
+    // We remove --wait here to avoid the generic "context deadline exceeded" error
+    // and instead rely on our more diagnostic waitForPodsReady below.
+    const managerRoleResult = await helm(
+      [
+        "upgrade", "--install", "ingext-manager-role",
+        "oci://public.ecr.aws/ingext/ingext-manager-role",
+        "--namespace", namespace,
+        // Removed --wait and --timeout as we verify below
+      ],
+      { AWS_PROFILE: profile, AWS_REGION: region }
+    );
 
   const managerRoleElapsed = Math.floor((Date.now() - managerRoleStartTime) / 1000);
   evidence.helm.releases.push({
@@ -372,12 +375,13 @@ export async function runPhase4CoreServices(
     const startTime = Date.now();
     
     // Use helm directly to add --wait --timeout flags
+    // We remove --wait here to avoid the generic "context deadline exceeded" error
+    // and instead rely on our more diagnostic waitForPodsReady below.
     const installResult = await helm(
       [
         "upgrade", "--install", release, chart,
         "--namespace", namespace,
-        "--wait",
-        "--timeout", "10m"
+        // Removed --wait and --timeout as we verify below
       ],
       { AWS_PROFILE: profile, AWS_REGION: region }
     );
@@ -425,168 +429,65 @@ export async function runPhase4CoreServices(
     evidence.helm.releases.push(releaseInfo);
   }
 
-  // STEP 5: Active pod readiness polling (NO SILENT 10-MINUTE WAITS!)
-  if (verbose) console.error(`\n⏳ Waiting for all pods to be Ready (checking every 30s, max 10 minutes)...`);
+  // STEP 5: Active pod readiness polling
+  if (verbose) console.error(`\n⏳ Waiting for all pods to be Ready (max 15 minutes)...`);
   
-  const maxWaitSeconds = 600;
-  const pollIntervalSeconds = 30;
-  const startTime = Date.now();
-  let allPodsReady = false;
-  let lastPodStatus = "";
-  
-  while (!allPodsReady && (Date.now() - startTime) < maxWaitSeconds * 1000) {
-    const elapsed = Math.floor((Date.now() - startTime) / 1000);
-    const minutes = Math.floor(elapsed / 60);
-    const seconds = elapsed % 60;
-    
-    if (verbose) {
-      process.stderr.write(`   [${minutes}m ${seconds}s] Checking pod status...\n`);
-    }
-    
-    // Get all pods in namespace
-    const podsResult = await kubectl(
-      ["get", "pods", "-n", namespace, "-o", "json"],
-      { AWS_PROFILE: profile, AWS_REGION: region }
-    );
-    
-    if (podsResult.ok) {
-      try {
-        const podsData = JSON.parse(podsResult.stdout);
-        const pods = podsData.items || [];
-        evidence.pods.total = pods.length;
-        evidence.pods.readyCount = 0;
-        evidence.pods.notReady = [];
-        
-        // Filter out completed/succeeded/failed pods and cronjob pods
-        const activePods = pods.filter((p: any) => {
-          const phase = p.status?.phase;
-          if (phase === "Succeeded" || phase === "Failed") return false;
-          
-          // Exclude pods created by CronJobs (they are meant to complete/fail)
-          const ownerRefs = p.metadata?.ownerReferences || [];
-          const isCronJobPod = ownerRefs.some((ref: any) => ref.kind === "Job" && p.metadata.name.includes("cronjob"));
-          if (isCronJobPod) return false;
-          
-          return true;
-        });
-        
-        for (const pod of activePods) {
-          const containerStatuses = pod.status.containerStatuses || [];
-          const readyCondition = pod.status?.conditions?.find((c: any) => c.type === "Ready");
-          const ready = readyCondition && readyCondition.status === "True";
-          
-          if (ready) {
-            evidence.pods.readyCount++;
-          } else {
-            const phase = pod.status.phase || "Unknown";
-            let reason = pod.status.containerStatuses?.[0]?.state?.waiting?.reason ||
-                         pod.status.containerStatuses?.[0]?.state?.terminated?.reason ||
-                         pod.status.reason ||
-                         undefined;
-            
-            // Check for PVC binding issues if pod is Pending
-            if (phase === "Pending") {
-              const podName = pod.metadata.name;
-              const eventsRes = await kubectl(
-                ["get", "events", "-n", namespace, "--field-selector", `involvedObject.name=${podName}`, "-o", "json"],
-                { AWS_PROFILE: profile, AWS_REGION: region }
-              );
-              
-              if (eventsRes.ok) {
-                try {
-                  const eventsData = JSON.parse(eventsRes.stdout);
-                  const events = eventsData.items || [];
-                  const pvcEvent = events.find((e: any) => e.message?.includes("unbound immediate PersistentVolumeClaims"));
-                  if (pvcEvent) {
-                    reason = "StorageWait";
-                  }
-                } catch (e) { /* ignore */ }
-              }
-            }
+  const waitResult = await waitForPodsReady(namespace, profile, region, {
+    maxWaitMinutes: 15,
+    verbose,
+    description: "Phase 4 (Core Services) pods"
+  });
 
-            evidence.pods.notReady.push({
-              name: pod.metadata.name,
-              status: phase,
-              reason,
-            });
-          }
+  evidence.pods.ready = waitResult.ok;
+  evidence.pods.total = waitResult.total;
+  evidence.pods.readyCount = waitResult.ready;
+
+  if (!waitResult.ok) {
+    // Capture diagnostics
+    evidence.pods.eventsTail = await captureNamespaceEvents(namespace, profile, region);
+    
+    for (const pod of waitResult.notReadyPods) {
+      const podName = pod.metadata?.name || "unknown";
+      const podStatus = pod.status?.phase || "Unknown";
+      
+      const crashAnalysis = await analyzeCrashLoop(podName, namespace, { AWS_PROFILE: profile, AWS_REGION: region });
+      
+      if (crashAnalysis) {
+        // Self-healing: if storage failed, kick the pod once
+        if (crashAnalysis.code === "STORAGE_MOUNT_FAILED" && options?.force !== true) {
+          if (verbose) console.error(`   Attempting self-healing: kicking pod ${podName} due to storage mount issue...`);
+          await kubectl(["delete", "pod", podName, "-n", namespace], { AWS_PROFILE: profile, AWS_REGION: region });
+          // Wait a bit for restart
+          await new Promise(resolve => setTimeout(resolve, 5000));
         }
-        
-        evidence.pods.ready = evidence.pods.notReady.length === 0 && activePods.length > 0;
-        
-        if (evidence.pods.ready) {
-          allPodsReady = true;
-          if (verbose) {
-            console.error(`✓ All pods are Ready! (${activePods.length} pods)`);
-          }
-          break;
-        }
-        
-        // Show what we're waiting for
-        const statusSummary = evidence.pods.notReady.map((p: any) => `${p.name}: ${p.status}${p.reason ? `(${p.reason})` : ""}`).slice(0, 5).join(", ");
-        if (verbose && statusSummary !== lastPodStatus) {
-          console.error(`   Waiting for ${evidence.pods.notReady.length} pod(s): ${statusSummary}`);
-          lastPodStatus = statusSummary;
-        }
-      } catch (e) {
-        if (verbose) console.error(`   Warning: Failed to parse pod status`);
-      }
-    }
-    
-    // Wait before next check
-    if (!allPodsReady) {
-      if (verbose) {
-        process.stderr.write(`   Next check in ${pollIntervalSeconds}s...\n`);
-      }
-      await new Promise(resolve => setTimeout(resolve, pollIntervalSeconds * 1000));
-    }
-  }
-  
-  const waitResult = { ok: allPodsReady, stdout: "", stderr: "" };
 
-  // If wait failed, capture diagnostics
-  if (!waitResult.ok || !evidence.pods.ready) {
-    // Get pods wide output
-    const podsWideResult = await kubectl(
-      ["get", "pods", "-n", namespace, "-o", "wide"],
-      { AWS_PROFILE: profile, AWS_REGION: region }
-    );
-
-    // Get events
-    const eventsResult = await kubectl(
-      ["get", "events", "-n", namespace, "--sort-by=.lastTimestamp"],
-      { AWS_PROFILE: profile, AWS_REGION: region }
-    );
-
-    if (eventsResult.ok) {
-      const eventsLines = eventsResult.stdout.split("\n").slice(-25);
-      evidence.pods.eventsTail = eventsLines.join("\n");
-    }
-
-    // Get describe for worst offenders (first 3 not ready pods)
-    for (const pod of evidence.pods.notReady.slice(0, 3)) {
-      const describeResult = await getPodEvents(pod.name, namespace, profile, region);
-      if (describeResult.ok && describeResult.events) {
-        // Add events to blocker message
-        const eventsExcerpt = describeResult.events.split("\n").slice(0, 15).join("\n");
         blockers.push({
-          code: `POD_NOT_READY_${pod.name.toUpperCase().replace(/-/g, '_')}`,
-          message: `Pod ${pod.name} is not ready (${pod.status}${pod.reason ? `: ${pod.reason}` : ""})\n\nEvents:\n${eventsExcerpt}`,
+          code: crashAnalysis.code,
+          message: `${crashAnalysis.message}${crashAnalysis.remediation ? `\n\nRemediation:\n${crashAnalysis.remediation}` : ""}`,
+        });
+      } else {
+        const podDiag = await capturePodDiagnostics(podName, namespace, profile, region);
+        blockers.push({
+          code: "POD_NOT_READY",
+          message: `Pod ${podName} is not ready (${podStatus}).\n\nRecent events:\n${podDiag.events.split("\n").slice(0, 10).join("\n")}`,
         });
       }
+
+      evidence.pods.notReady.push({
+        name: podName,
+        status: podStatus,
+        reason: pod.status?.conditions?.find((c: any) => c.type === "Ready")?.reason
+      });
     }
 
-    if (podsWideResult.ok) {
+    if (blockers.length === 0) {
       blockers.push({
         code: "PODS_NOT_READY",
-        message: `Not all pods are ready in namespace ${namespace}.\n\nPod status:\n${podsWideResult.stdout}\n\nRecent events:\n${evidence.pods.eventsTail || "No events found"}`,
-      });
-    } else {
-      blockers.push({
-        code: "POD_READINESS_TIMEOUT",
-        message: `Timeout waiting for pods to be ready in namespace ${namespace}. Check pod status manually.`,
+        message: `Timeout waiting for pods to be ready in namespace ${namespace}.`,
       });
     }
+
+    return { ok: false, evidence, blockers };
   }
 
   return {
