@@ -1,0 +1,7 @@
+# StorageClass configuration
+storageClassName: "ingext-aws-gp3"
+isDefault: true
+encrypted: true
+reclaimPolicy: "Delete"
+volumeBindingMode: "WaitForFirstConsumer"
+allowVolumeExpansion: true

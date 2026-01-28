@@ -1,0 +1,21 @@
+{
+  "name": "lakehouse-aws-skill",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "lakehouse": "./bin/lakehouse.js"
+  },
+  "scripts": {
+    "dev": "tsx bin/lakehouse.ts",
+    "dev:run": "tsx bin/run.ts",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}

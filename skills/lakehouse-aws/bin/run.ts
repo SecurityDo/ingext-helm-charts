@@ -1,7 +1,12 @@
 import { PreflightInputSchema } from "../src/schema.js";
 import { runPreflight } from "../src/skill.js";
 import { runInstall } from "../src/install.js";
+import { runStatus } from "../src/status.js";
+import { runCleanup } from "../src/cleanup.js";
 import { setExecMode } from "../src/tools/shell.js";
+import { readEnvFile, discoverEnvFiles } from "../src/tools/file.js";
+import { getALBHostname, testALBReadiness, testDNSResolution } from "../src/tools/alb.js";
+import { findHostedZoneForDomain } from "../src/tools/route53.js";
 
 function parseArgs(argv: string[]) {
   const out: Record<string, any> = {};
@@ -17,19 +22,88 @@ function parseArgs(argv: string[]) {
 
 const args = parseArgs(process.argv.slice(2));
 
-// Map CLI args -> schema fields
+// Check for action/command
+const action = args["action"] || "preflight"; // preflight, install, status, cleanup, url
+
+// Helper to get value from CLI args, then env file, then undefined
+function getValue(cliKey: string, envKey: string, envVars: Record<string, string>): string | undefined {
+  return args[cliKey] || envVars[envKey] || undefined;
+}
+
+// Get namespace first (needed to compute env file path)
+const namespaceFromArgs = args["namespace"];
+let namespace = namespaceFromArgs;
+
+// Try to load namespace-scoped .env file as fallback (CLI args take precedence)
+// If namespace is provided, use it; otherwise try to infer from available env files
+let envVars: Record<string, string> = {};
+let envFilePath: string | undefined;
+
+if (namespace) {
+  // Namespace provided: use namespace-scoped env file
+  envFilePath = args["output-env"] || `./lakehouse_${namespace}.env`;
+  const envFile = await readEnvFile(envFilePath!);
+  if (envFile.ok && envFile.env) {
+    envVars = envFile.env;
+    // If namespace wasn't in env file, use the one from CLI
+    namespace = namespace || envFile.env.NAMESPACE || namespace;
+  }
+} else {
+  // No namespace provided: try to discover available env files
+  const discoveredNamespaces = discoverEnvFiles(".");
+  
+  if (discoveredNamespaces.length === 0) {
+    // No env files found: default to "ingext" (will be created on preflight)
+    namespace = "ingext";
+    envFilePath = args["output-env"] || `./lakehouse_${namespace}.env`;
+  } else if (discoveredNamespaces.length === 1) {
+    // Exactly one env file: use it automatically
+    namespace = discoveredNamespaces[0];
+    envFilePath = args["output-env"] || `./lakehouse_${namespace}.env`;
+    const envFile = await readEnvFile(envFilePath!);
+    if (envFile.ok && envFile.env) {
+      envVars = envFile.env;
+      namespace = envFile.env.NAMESPACE || namespace;
+    }
+  } else {
+    // Multiple env files found: require namespace to be specified
+    // For now, default to "ingext" but this should ideally be an error for install/status
+    // For preflight, it's OK to default since it will create the file
+    if (action === "preflight") {
+      namespace = "ingext";
+      envFilePath = args["output-env"] || `./lakehouse_${namespace}.env`;
+    } else {
+      // For install/status, try "ingext" first, then first discovered
+      namespace = discoveredNamespaces.includes("ingext") ? "ingext" : discoveredNamespaces[0];
+      envFilePath = args["output-env"] || `./lakehouse_${namespace}.env`;
+      const envFile = await readEnvFile(envFilePath!);
+      if (envFile.ok && envFile.env) {
+        envVars = envFile.env;
+        namespace = envFile.env.NAMESPACE || namespace;
+      }
+      // Warn user that namespace was inferred
+      if (action === "install" || action === "status") {
+        console.error(`⚠️  Multiple env files found. Using namespace: ${namespace}`);
+        console.error(`   Available namespaces: ${discoveredNamespaces.join(", ")}`);
+        console.error(`   Specify --namespace to use a different one.`);
+      }
+    }
+  }
+}
+
+// Map CLI args -> schema fields (CLI args override env file)
 const raw = {
-  awsProfile: args["profile"],
-  awsRegion: args["region"],
-  clusterName: args["cluster"],
-  s3Bucket: args["bucket"],
-  rootDomain: args["root-domain"],
-  siteDomain: args["domain"], // optional - will be constructed from rootDomain if not provided
-  certArn: args["cert-arn"],
-  namespace: args["namespace"],
-  nodeType: args["node-type"],
-  nodeCount: args["node-count"],
-  outputEnvPath: args["output-env"],
+  awsProfile: getValue("profile", "AWS_PROFILE", envVars) || "default",
+  awsRegion: getValue("region", "AWS_REGION", envVars) || "us-east-2",
+  clusterName: getValue("cluster", "CLUSTER_NAME", envVars),
+  s3Bucket: getValue("bucket", "S3_BUCKET", envVars),
+  rootDomain: getValue("root-domain", "ROOT_DOMAIN", envVars),
+  siteDomain: getValue("domain", "SITE_DOMAIN", envVars), // optional - will be constructed from rootDomain if not provided
+  certArn: getValue("cert-arn", "CERT_ARN", envVars),
+  namespace: namespace || getValue("namespace", "NAMESPACE", envVars) || "ingext",
+  nodeType: getValue("node-type", "NODE_TYPE", envVars),
+  nodeCount: getValue("node-count", "NODE_COUNT", envVars),
+  outputEnvPath: args["output-env"], // Will be computed in preflight as lakehouse_{namespace}.env
   writeEnvFile: args["write-env"] !== "false",
   overwriteEnv: args["overwrite-env"] !== undefined && args["overwrite-env"] !== "false",
   dnsCheck: args["dns-check"] !== "false",
@@ -42,41 +116,496 @@ const raw = {
   },
 };
 
-const input = PreflightInputSchema.parse(raw);
-
 // Set execution mode globally for all tool wrappers
-setExecMode(input.execMode);
+setExecMode(raw.execMode as "docker" | "local");
 
-const preflightResult = await runPreflight(input);
+function formatStatusOutput(result: any) {
+  const GREEN = "\x1b[0;32m";
+  const YELLOW = "\x1b[1;33m";
+  const RED = "\x1b[0;31m";
+  const NC = "\x1b[0m"; // No Color
+  
+  const getStatusColor = (status: string): string => {
+    // Success states (green)
+    if (status === "ACTIVE" || status === "Running" || status === "EXISTS" || status === "deployed" || 
+        status === "Issued" || status === "Attached" || status === "Installed") {
+      return `${GREEN}${status}${NC}`;
+    } 
+    // Warning/In-progress states (yellow)
+    else if (status === "CREATING" || status === "PROVISIONING..." || status === "Pending" || 
+             status === "PENDING_VALIDATION" || status === "Starting" || status === "Pending Validation") {
+      return `${YELLOW}${status}${NC}`;
+    } 
+    // Error states (red)
+    else {
+      return `${RED}${status}${NC}`;
+    }
+  };
 
-// Prepare output structure
-const output: { preflight: typeof preflightResult; install?: any } = {
-  preflight: preflightResult,
-};
+  console.log("");
+  console.log("=".repeat(80));
+  console.log(`Lakehouse Status: ${result.cluster.name}`);
+  console.log("=".repeat(80));
+  console.log(`${"COMPONENT".padEnd(45)} STATUS`);
+  console.log("-".repeat(80));
 
-// If preflight passed, run install (which will show plan if not approved, or execute if approved)
-if (preflightResult.okToInstall) {
-  const installResult = await runInstall(
-    {
-      approve: input.approve ?? false,
-      env: preflightResult.env,
-    },
-    preflightResult
-  );
-  output.install = installResult;
+  // Infrastructure
+  const eksStatus = result.cluster.details?.eksStatus || result.cluster.status.toUpperCase();
+  console.log(`${`EKS Cluster (${result.cluster.name})`.padEnd(45)} ${getStatusColor(eksStatus)}`);
+
+  if (result.infrastructure.s3.bucketName) {
+    const s3Status = result.infrastructure.s3.exists ? "EXISTS" : "NOT FOUND";
+    console.log(`${`S3 Bucket (${result.infrastructure.s3.bucketName})`.padEnd(45)} ${getStatusColor(s3Status)}`);
+  }
+
+  // Core Services
+  console.log("");
+  console.log("[Core Services]");
+  for (const comp of result.components.coreServices || []) {
+    console.log(`  ${comp.displayName.padEnd(43)} ${getStatusColor(comp.status)}`);
+  }
+
+  // Stream Services
+  console.log("");
+  console.log("[Ingext Stream]");
+  for (const comp of result.components.stream || []) {
+    console.log(`  ${comp.displayName.padEnd(43)} ${getStatusColor(comp.status)}`);
+  }
+
+  // Datalake Services
+  console.log("");
+  console.log("[Ingext Datalake]");
+  for (const comp of result.components.datalake || []) {
+    console.log(`  ${comp.displayName.padEnd(43)} ${getStatusColor(comp.status)}`);
+  }
+
+  // Networking & SSL
+  console.log("");
+  console.log("[Networking & SSL]");
+  
+  // Ingress status
+  if (result.networking.loadBalancer) {
+    const lb = result.networking.loadBalancer;
+    let ingressStatus = "NOT INSTALLED";
+    
+    if (lb.hostname) {
+      ingressStatus = "Installed";
+      console.log(`  ${"Ingress".padEnd(43)} ${GREEN}${ingressStatus}${NC}`);
+    } else if (lb.status === "deployed") {
+      ingressStatus = "PROVISIONING";
+      console.log(`  ${"Ingress".padEnd(43)} ${YELLOW}${ingressStatus}${NC}`);
+    } else {
+      console.log(`  ${"Ingress".padEnd(43)} ${RED}${ingressStatus}${NC}`);
+    }
+  } else {
+    console.log(`  ${"Ingress".padEnd(43)} ${RED}NOT INSTALLED${NC}`);
+  }
+  
+  // ALB DNS name
+  if (result.networking.loadBalancer) {
+    const lb = result.networking.loadBalancer;
+    if (lb.hostname) {
+      console.log(`  ${"AWS Load Balancer".padEnd(43)} ${GREEN}${lb.hostname}${NC}`);
+    } else if (lb.ip) {
+      console.log(`  ${"AWS Load Balancer".padEnd(43)} ${GREEN}${lb.ip}${NC}`);
+    } else {
+      console.log(`  ${"AWS Load Balancer".padEnd(43)} ${YELLOW}PROVISIONING...${NC}`);
+    }
+  }
+
+  if (result.networking.siteDomain) {
+    console.log(`  ${"DNS Domain".padEnd(43)} ${result.networking.siteDomain}`);
+  }
+
+  // TLS Certificate status
+  if (result.infrastructure.certificate.acmStatus) {
+    const certStatus = result.infrastructure.certificate.acmStatus === "ISSUED" 
+      ? "Attached" 
+      : result.infrastructure.certificate.acmStatus === "PENDING_VALIDATION"
+      ? "Pending Validation"
+      : result.infrastructure.certificate.acmStatus;
+    console.log(`  ${"TLS Certificate".padEnd(43)} ${getStatusColor(certStatus)}`);
+  }
+
+  console.log("-".repeat(80));
+  console.log(`Pod Summary: ${result.podSummary.running} running / ${result.podSummary.total} total`);
+  console.log("=".repeat(80));
+  console.log("");
+  console.log("💡 TIP: If components are 'NOT DEPLOYED' or stuck, check logs:");
+  console.log("   kubectl logs -n <namespace> <pod-name>");
+  console.log("");
 }
 
-console.log(JSON.stringify(output, null, 2));
-
-// Exit code logic
-if (output.install) {
-  if (output.install.status === "completed_phase") {
+// Handle different actions
+if (action === "status") {
+  // Status action - show what's deployed
+  // Use namespace-scoped env file values as fallback if CLI args not provided
+  const statusResult = await runStatus({
+    awsProfile: raw.awsProfile,
+    awsRegion: raw.awsRegion,
+    clusterName: raw.clusterName || envVars.CLUSTER_NAME || "ingext-lakehouse",
+    s3Bucket: raw.s3Bucket || envVars.S3_BUCKET,
+    namespace: raw.namespace || envVars.NAMESPACE || "ingext",
+    rootDomain: raw.rootDomain || envVars.ROOT_DOMAIN,
+    siteDomain: raw.siteDomain || envVars.SITE_DOMAIN,
+    certArn: raw.certArn || envVars.CERT_ARN,
+  });
+  
+  // Format output similar to bash script
+  formatStatusOutput(statusResult);
+  
+  // Also output JSON for programmatic use
+  if (args["json"] === "true" || args["json"] === true) {
+    console.log("\n" + JSON.stringify(statusResult, null, 2));
+  }
+  
+  process.exit(0);
+} else if (action === "install") {
+  // Standalone install action: requires namespace and env file
+  if (!namespace) {
+    const discovered = discoverEnvFiles(".");
+    console.error("❌ Error: Namespace is required for install action.");
+    if (discovered.length > 0) {
+      console.error(`   Available namespaces: ${discovered.join(", ")}`);
+      console.error(`   Specify --namespace <namespace> to use one of these.`);
+    } else {
+      console.error(`   No env files found. Run preflight first to create one.`);
+    }
+    process.exit(1);
+  }
+  
+  // Load env file for install (use already discovered path or compute)
+  const installEnvFilePath = envFilePath || args["output-env"] || `./lakehouse_${namespace}.env`;
+  const envFileForInstall = await readEnvFile(installEnvFilePath);
+  
+  if (!envFileForInstall.ok || !envFileForInstall.env) {
+    console.error(`❌ Error: No environment file found for namespace '${namespace}'.`);
+    console.error(`   Expected: ${installEnvFilePath}`);
+    console.error(`   Run preflight first to generate the env file.`);
+    process.exit(1);
+  }
+  
+  // Merge env file with CLI args (CLI takes precedence)
+  const installEnv = { ...envFileForInstall.env };
+  
+  console.error("\n⏳ Running install (standalone mode)...");
+  const installResult = await runInstall(
+    {
+      approve: raw.approve ?? false,
+      env: installEnv,
+      force: args["force"] === "true" || args["force"] === true,
+      namespace: namespace,
+      envFile: installEnvFilePath,
+      verbose: args["verbose"] !== "false", // Default to true for user feedback
+    },
+    undefined // No preflight result for standalone install
+  );
+  console.error("✓ Install completed");
+  
+  console.log(JSON.stringify({ install: installResult }, null, 2));
+  
+  // Exit code logic
+  if (installResult.status === "completed_phase") {
     process.exit(0);
-  } else if (output.install.status === "error") {
+  } else if (installResult.status === "error") {
     process.exit(1);
   } else {
     process.exit(2); // needs_input
   }
+} else if (action === "cleanup") {
+  // Cleanup action: requires namespace and env file
+  if (!namespace) {
+    const discovered = discoverEnvFiles(".");
+    console.error("❌ Error: Namespace is required for cleanup action.");
+    if (discovered.length > 0) {
+      console.error(`   Available namespaces: ${discovered.join(", ")}`);
+      console.error(`   Specify --namespace <namespace> to use one of these.`);
+    } else {
+      console.error(`   No env files found. Cannot determine what to clean up.`);
+    }
+    process.exit(1);
+  }
+  
+  // Load env file for cleanup
+  const cleanupEnvFilePath = envFilePath || args["output-env"] || `./lakehouse_${namespace}.env`;
+  const envFileForCleanup = await readEnvFile(cleanupEnvFilePath);
+  
+  if (!envFileForCleanup.ok || !envFileForCleanup.env) {
+    console.error(`❌ Error: No environment file found for namespace '${namespace}'.`);
+    console.error(`   Expected: ${cleanupEnvFilePath}`);
+    console.error(`   Cannot proceed without env file to know what to clean up.`);
+    process.exit(1);
+  }
+  
+  // Merge env file with CLI args (CLI takes precedence)
+  const cleanupEnv = { ...envFileForCleanup.env };
+  
+  console.error("\n⏳ Running cleanup...");
+  const cleanupResult = await runCleanup({
+    awsProfile: raw.awsProfile || cleanupEnv.AWS_PROFILE || "default",
+    awsRegion: raw.awsRegion || cleanupEnv.AWS_REGION || "us-east-2",
+    clusterName: raw.clusterName || cleanupEnv.CLUSTER_NAME || "",
+    s3Bucket: raw.s3Bucket || cleanupEnv.S3_BUCKET,
+    namespace: namespace,
+    approve: raw.approve === true,
+    envFile: cleanupEnvFilePath,
+  });
+  console.error("✓ Cleanup completed");
+  
+  console.log(JSON.stringify({ cleanup: cleanupResult }, null, 2));
+  
+  // Exit code logic
+  if (cleanupResult.status === "completed") {
+    process.exit(0);
+  } else if (cleanupResult.status === "error") {
+    process.exit(1);
+  } else if (cleanupResult.status === "needs_approval") {
+    process.exit(2); // needs approval
+  } else {
+    process.exit(3); // partial completion
+  }
+} else if (action === "url") {
+  // URL action - get and display ALB URL
+  if (!namespace) {
+    const discovered = discoverEnvFiles(".");
+    console.error("❌ Error: Namespace is required for url action.");
+    if (discovered.length > 0) {
+      console.error(`   Available namespaces: ${discovered.join(", ")}`);
+      console.error(`   Specify --namespace <namespace> to use one of these.`);
+    } else {
+      console.error(`   No env files found. Run preflight first to create one.`);
+    }
+    process.exit(1);
+  }
+  
+  // Load env file
+  const urlEnvFilePath = envFilePath || args["output-env"] || `./lakehouse_${namespace}.env`;
+  const envFileForUrl = await readEnvFile(urlEnvFilePath);
+  
+  if (!envFileForUrl.ok || !envFileForUrl.env) {
+    console.error(`❌ Error: No environment file found for namespace '${namespace}'.`);
+    console.error(`   Expected: ${urlEnvFilePath}`);
+    console.error(`   Run preflight first to generate the env file.`);
+    process.exit(1);
+  }
+  
+  const urlEnv = { ...envFileForUrl.env };
+  const profile = raw.awsProfile || urlEnv.AWS_PROFILE || "default";
+  const region = raw.awsRegion || urlEnv.AWS_REGION || "us-east-2";
+  const siteDomain = raw.siteDomain || urlEnv.SITE_DOMAIN;
+  const testReadiness = args["test"] === "true" || args["test"] === true;
+  const waitForProvisioning = args["wait"] === "true" || args["wait"] === true;
+  
+  // Get ALB hostname
+  const hostnameResult = await getALBHostname(namespace, profile, region);
+  
+  if (!hostnameResult.hostname) {
+    console.error("❌ ALB hostname not yet assigned.");
+    console.error("");
+    console.error("   The ALB is still being provisioned by AWS.");
+    console.error("   This typically takes 2-5 minutes after Phase 7 (Ingress) completes.");
+    console.error("");
+    console.error("💡 Tips:");
+    console.error("   - Wait a few minutes and try again: lakehouse url");
+    console.error("   - Check ingress status: kubectl get ingress -n " + namespace);
+    console.error("   - Use --wait to wait for provisioning: lakehouse url --wait");
+    process.exit(1);
+  }
+  
+  const hostname = hostnameResult.hostname;
+  
+  // Test readiness if requested
+  let readinessResult;
+  if (testReadiness || waitForProvisioning) {
+    readinessResult = await testALBReadiness(
+      namespace,
+      profile,
+      region,
+      {
+        waitForProvisioning,
+        maxWaitMinutes: 5,
+        testHttp: testReadiness,
+        testDns: false, // We'll test DNS separately for better output
+        siteDomain: siteDomain,
+        verbose: true
+      }
+    );
+  }
+  
+  // Test DNS resolution if --test is used and domain is configured
+  let dnsTestResult;
+  if (testReadiness && siteDomain) {
+    console.error("");
+    console.error("🔍 Testing DNS resolution...");
+    dnsTestResult = await testDNSResolution(siteDomain);
+    
+    // Also check Route53 record if available
+    const domainParts = siteDomain.split(".");
+    const rootDomain = domainParts.slice(-2).join(".");
+    const zoneResult = await findHostedZoneForDomain(rootDomain);
+    
+    if (zoneResult.ok && zoneResult.zoneId) {
+      // Check if DNS record exists in Route53
+      const { run } = await import("../src/tools/shell.js");
+      const listRecordsResult = await run("aws", [
+        "route53",
+        "list-resource-record-sets",
+        "--hosted-zone-id",
+        zoneResult.zoneId,
+        "--query",
+        `ResourceRecordSets[?Name=='${siteDomain}.'] || ResourceRecordSets[?Name=='${siteDomain}']`,
+        "--output",
+        "json"
+      ], { AWS_PROFILE: profile, AWS_REGION: region });
+      
+      if (listRecordsResult.ok) {
+        try {
+          const records = JSON.parse(listRecordsResult.stdout);
+          if (records && records.length > 0) {
+            const record = records[0];
+            if (record.AliasTarget) {
+              const aliasTarget = record.AliasTarget.DNSName.replace(/\.$/, ""); // Remove trailing dot
+              if (aliasTarget === hostname) {
+                console.error(`✓ Route53 DNS record points to correct ALB`);
+              } else {
+                console.error(`⚠️  Route53 DNS record points to different ALB:`);
+                console.error(`   Current: ${aliasTarget}`);
+                console.error(`   Expected: ${hostname}`);
+                console.error(`   💡 Update DNS: npx tsx scripts/configure-dns.ts`);
+              }
+            }
+          } else {
+            console.error(`⚠️  No Route53 DNS record found for ${siteDomain}`);
+            console.error(`   💡 Create DNS record: npx tsx scripts/configure-dns.ts`);
+          }
+        } catch (e) {
+          // Ignore parse errors
+        }
+      }
+    }
+  }
+  
+  // Display results
+  console.error("");
+  console.error("=".repeat(60));
+  console.error("🌐 Lakehouse URL");
+  console.error("=".repeat(60));
+  console.error("");
+  
+  if (siteDomain) {
+    console.log(`https://${siteDomain}`);
+    console.error("");
+    console.error(`   Domain: ${siteDomain}`);
+  } else {
+    console.log(`https://${hostname}`);
+    console.error("");
+    console.error(`   ALB Hostname: ${hostname}`);
+    console.error("");
+    console.error("💡 Tip: Configure DNS to use your domain:");
+    console.error(`   npx tsx scripts/configure-dns.ts`);
+  }
+  
+  console.error(`   ALB Hostname: ${hostname}`);
+  
+  if (readinessResult) {
+    console.error("");
+    if (readinessResult.ready) {
+      console.error("✅ ALB is ready and working");
+      if (readinessResult.httpTest?.statusCode) {
+        console.error(`   HTTP Test: ${readinessResult.httpTest.statusCode}`);
+      }
+    } else {
+      console.error(`⚠️  ${readinessResult.message}`);
+    }
+  }
+  
+  // Display DNS test results
+  if (dnsTestResult) {
+    console.error("");
+    if (dnsTestResult.resolves) {
+      console.error("✅ DNS resolves correctly");
+      if (dnsTestResult.resolvedIp) {
+        console.error(`   Resolves to: ${dnsTestResult.resolvedIp}`);
+      }
+    } else {
+      console.error("❌ DNS does not resolve");
+      if (dnsTestResult.error) {
+        console.error(`   Error: ${dnsTestResult.error}`);
+      }
+      console.error("");
+      console.error("💡 Solutions:");
+      console.error("   1. Create/update DNS record: npx tsx scripts/configure-dns.ts");
+      console.error("   2. Wait 1-5 minutes for DNS propagation");
+      console.error("   3. Clear local DNS cache:");
+      console.error("      macOS: sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder");
+    }
+  } else if (testReadiness && !siteDomain) {
+    console.error("");
+    console.error("💡 Tip: Configure a domain to test DNS resolution");
+  } else if (!testReadiness) {
+    console.error("");
+    console.error("💡 Tip: Use --test to verify ALB connectivity and DNS:");
+    console.error(`   lakehouse url --test`);
+  }
+  
+  console.error("");
+  console.error("=".repeat(60));
+  
+  // Output URL to stdout for scripting (only if not in test mode)
+  if (!testReadiness && !readinessResult) {
+    // Just output the URL
+    if (siteDomain) {
+      console.log(`https://${siteDomain}`);
+    } else {
+      console.log(`https://${hostname}`);
+    }
+  }
+  
+  process.exit(0);
 } else {
-  process.exit(preflightResult.okToInstall ? 0 : 2);
+  // Default: preflight + install flow
+  const input = PreflightInputSchema.parse(raw);
+  console.error("\n⏳ Running preflight...");
+  const preflightResult = await runPreflight(input);
+  console.error("✓ Preflight completed");
+
+  // Prepare output structure
+  const output: { preflight: typeof preflightResult; install?: any } = {
+    preflight: preflightResult,
+  };
+
+  // If preflight passed, run install (which will show plan if not approved, or execute if approved)
+  if (preflightResult.okToInstall) {
+    console.error("\n⏳ Running install...");
+    const installResult = await runInstall(
+      {
+        approve: input.approve ?? false,
+        env: preflightResult.env,
+        force: args["force"] === "true" || args["force"] === true,
+        namespace: preflightResult.env.NAMESPACE,
+        envFile: preflightResult.envFile,
+        verbose: args["verbose"] !== "false", // Default to true for user feedback
+      },
+      preflightResult
+    );
+    console.error("✓ Install completed");
+    output.install = installResult;
+  }
+
+  console.error("\n⏳ Preparing JSON output...");
+  console.log(JSON.stringify(output, null, 2));
+  console.error("✓ Output complete");
+
+  // Exit code logic
+  if (output.install) {
+    if (output.install.status === "completed_phase") {
+      process.exit(0);
+    } else if (output.install.status === "error") {
+      process.exit(1);
+    } else {
+      process.exit(2); // needs_input
+    }
+  } else {
+    process.exit(preflightResult.okToInstall ? 0 : 2);
+  }
 }
