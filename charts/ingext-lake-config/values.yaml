@@ -6,4 +6,5 @@ s3:
 blob:
   storageAccount:  
 gcs:
-  bucket:  
+  bucket:
+  targetServiceAccount:
