@@ -259,12 +259,64 @@ if command -v aws >/dev/null 2>&1; then
 fi
 
 
+# -------- 1. Enable GKE Add-ons (CSI Drivers) --------
+log "Updating GKE Add-ons: PD CSI and GCS Fuse CSI..."
+gcloud container clusters update "$CLUSTER_NAME" \
+    --region "$REGION" \
+    --update-addons=GcePersistentDiskCsiDriver=ENABLED,GcsFuseCsiDriver=ENABLED
+
+# -------- 2. Storage Class (gp3 Equivalent) --------
+log "Creating StorageClass (pd-balanced)..."
+helm upgrade --install ingext-gke-ssd oci://public.ecr.aws/ingext/ingext-gke-ssd 
+
+# -------- 3. GCS Bucket Creation --------
+log "Checking GCS Bucket '$GCS_BUCKET'..."
+if ! gcloud storage buckets describe "gs://$GCS_BUCKET" &>/dev/null; then
+    log "Creating bucket '$GCS_BUCKET' in $REGION..."
+    gcloud storage buckets create "gs://$GCS_BUCKET" --location="$REGION"
+else
+    log "Bucket '$GCS_BUCKET' already exists."
+fi
+
+# -------- 4. IAM & Workload Identity Setup --------
+log "Configuring Workload Identity for '$SA_NAME'..."
+
+# Create Google Service Account (GSA) if it doesn't exist
+if ! gcloud iam service-accounts describe "$GSA_NAME@$PROJECT_ID.iam.gserviceaccount.com" &>/dev/null; then
+    gcloud iam service-accounts create "$GSA_NAME" --display-name="Ingext App Service Account"
+fi
+
+# Assign GCS Permissions to the GSA
+log "Assigning Storage Object Admin to GSA..."
+gcloud storage buckets add-iam-policy-binding "gs://$GCS_BUCKET" \
+    --member="serviceAccount:$GSA_NAME@$PROJECT_ID.iam.gserviceaccount.com" \
+    --role="roles/storage.objectAdmin"
+
+# Allow Kubernetes SA (KSA) to impersonate GSA
+log "Binding KSA to GSA via Workload Identity..."
+gcloud iam service-accounts add-iam-policy-binding "$GSA_NAME@$PROJECT_ID.iam.gserviceaccount.com" \
+    --role="roles/iam.workloadIdentityUser" \
+    --member="serviceAccount:$PROJECT_ID.svc.id.goog[$NAMESPACE/$SA_NAME]"
+
+
+
 
 log "Create namespace: $NAMESPACE"
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
 log "Create service account: ${NAMESPACE}-sa"
-kubectl create serviceaccount "${NAMESPACE}-sa" -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+#kubectl create serviceaccount "${NAMESPACE}-sa" -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+helm install ingext-serviceaccount oci://public.ecr.aws/ingext/ingext-serviceaccount \
+  --set serviceAccount.gcpServiceAccount="$GSA_NAME@$PROJECT_ID.iam.gserviceaccount.com" \
+  --namespace "$NAMESPACE"
+
+log "Setup k8s role for ingext service account"
+helm upgrade --install ingext-manager-role oci://public.ecr.aws/ingext/ingext-manager-role -n "$NAMESPACE"
+
+#helm upgrade --install ingext-gcs-lake oci://public.ecr.aws/ingext/ingext-gcs-lake -n "$NAMESPACE" \
+#  --set bucket.name="$GCS_BUCKET"
+
+
 
 # setup token in app-secret for shell cli access
 random_str=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 15 || true)
@@ -294,6 +346,17 @@ log "Install main application"
 helm upgrade --install ingext-community oci://public.ecr.aws/ingext/ingext-community -n "$NAMESPACE" --set k8sProvider="$k8sProvider"
 
 wait_ns_pods_ready "$NAMESPACE" "1200s"
+
+
+helm upgrade --install ingext-gcs-lake oci://public.ecr.aws/ingext/ingext-gcs-lake -n "$NAMESPACE" \
+  --set bucket.name="$GCS_BUCKET"
+
+echo "Installing Ingext DataLake configuration..."
+helm install ingext-lake-config oci://public.ecr.aws/ingext/ingext-lake-config \
+  -n "$NAMESPACE" \
+  --set storageType=gcs \
+  --set gcs.bucket="$GCS_BUCKET"
+
 
 log "Install cert-manager"
 helm repo add jetstack https://charts.jetstack.io >/dev/null
