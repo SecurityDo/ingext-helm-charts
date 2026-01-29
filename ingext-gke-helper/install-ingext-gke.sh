@@ -355,7 +355,8 @@ echo "Installing Ingext DataLake configuration..."
 helm install ingext-lake-config oci://public.ecr.aws/ingext/ingext-lake-config \
   -n "$NAMESPACE" \
   --set storageType=gcs \
-  --set gcs.bucket="$GCS_BUCKET"
+  --set gcs.bucket="$GCS_BUCKET" \
+  --set gcs.targetServiceAccount="$GSA_NAME@$PROJECT_ID.iam.gserviceaccount.com"
 
 
 log "Install cert-manager"
