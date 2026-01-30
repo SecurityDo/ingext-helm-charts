@@ -77,6 +77,7 @@ VPC_NETWORK="${VPC_NETWORK:-}"
 SUBNET="${SUBNET:-}"
 
 k8sProvider=gcp
+
 # -------- Parse arguments --------
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -228,6 +229,9 @@ else
     --enable-autoscaling \
     --min-nodes=1 \
     --max-nodes=3 \
+    --workload-pool=$PROJECT_ID.svc.id.goog \
+    --workload-metadata=GKE_METADATA \
+    --addons=GcsFuseCsiDriver,GcePersistentDiskCsiDriver,HttpLoadBalancing \
     --release-channel=regular"
   
   if [[ -n "$VPC_NETWORK" ]]; then CLUSTER_CMD="$CLUSTER_CMD --network=$VPC_NETWORK"; fi
@@ -260,10 +264,10 @@ fi
 
 
 # -------- 1. Enable GKE Add-ons (CSI Drivers) --------
-log "Updating GKE Add-ons: PD CSI and GCS Fuse CSI..."
-gcloud container clusters update "$CLUSTER_NAME" \
-    --region "$REGION" \
-    --update-addons=GcePersistentDiskCsiDriver=ENABLED,GcsFuseCsiDriver=ENABLED
+#log "Updating GKE Add-ons: PD CSI and GCS Fuse CSI..."
+#gcloud container clusters update "$CLUSTER_NAME" \
+#    --region "$REGION" \
+#    --update-addons=GcePersistentDiskCsiDriver=ENABLED,GcsFuseCsiDriver=ENABLED
 
 # -------- 2. Storage Class (gp3 Equivalent) --------
 log "Creating StorageClass (pd-balanced)..."
@@ -310,8 +314,8 @@ helm install ingext-serviceaccount oci://public.ecr.aws/ingext/ingext-serviceacc
   --set serviceAccount.gcpServiceAccount="$GSA_NAME@$PROJECT_ID.iam.gserviceaccount.com" \
   --namespace "$NAMESPACE"
 
-log "Setup k8s role for ingext service account"
-helm upgrade --install ingext-manager-role oci://public.ecr.aws/ingext/ingext-manager-role -n "$NAMESPACE"
+#log "Setup k8s role for ingext service account"
+#helm upgrade --install ingext-manager-role oci://public.ecr.aws/ingext/ingext-manager-role -n "$NAMESPACE"
 
 #helm upgrade --install ingext-gcs-lake oci://public.ecr.aws/ingext/ingext-gcs-lake -n "$NAMESPACE" \
 #  --set bucket.name="$GCS_BUCKET"
@@ -359,6 +363,47 @@ helm install ingext-lake-config oci://public.ecr.aws/ingext/ingext-lake-config \
   --set gcs.targetServiceAccount="$GSA_NAME@$PROJECT_ID.iam.gserviceaccount.com"
 
 
+# install karpenter
+KARPENTER_SA_NAME="karpenter-sa"
+
+gcloud iam service-accounts create $KARPENTER_SA_NAME     --description="Karpenter Controller Service Account"     --display-name="Karpenter"
+
+# Assign Compute Admin
+gcloud projects add-iam-policy-binding $PROJECT_ID --member="serviceAccount:${KARPENTER_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" --role="roles/compute.admin" --condition=None
+
+# Assign Kubernetes Engine Admin
+gcloud projects add-iam-policy-binding $PROJECT_ID --member="serviceAccount:${KARPENTER_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" --role="roles/container.admin" --condition=None
+
+# Assign Service Account User
+gcloud projects add-iam-policy-binding $PROJECT_ID --member="serviceAccount:${KARPENTER_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" --role="roles/iam.serviceAccountUser" --condition=None
+
+# Allow the Kubernetes Pod (karpenter) to act as the Google Service Account
+gcloud iam service-accounts add-iam-policy-binding "${KARPENTER_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" --role roles/iam.workloadIdentityUser --member "serviceAccount:${PROJECT_ID}.svc.id.goog[karpenter-system/karpenter]"
+
+kubectl create namespace karpenter-system
+
+cd ../charts
+
+helm upgrade --install karpenter karpenter \
+  --namespace karpenter-system --create-namespace \
+  --set "controller.settings.projectID=${PROJECT_ID}" \
+  --set "controller.settings.clusterLocation=${REGION}" \
+  --set "controller.settings.clusterName=${CLUSTER_NAME}" \
+  --set "credentials.enabled=false" --set serviceAccount.annotations.'iam\.gke\.io/gcp-service-account'="${KARPENTER_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+
+cd ../ingext-gke-helper
+
+
+# Node Pools via Karpenter
+helm upgrade --install ingext-merge-pool ingext-gke-pool \
+  --set poolName=pool-merge --set clusterName="$CLUSTER_NAME"
+
+helm upgrade --install ingext-search-pool ingext-gke-pool \
+  --set poolName=pool-search --set clusterName="$CLUSTER_NAME" --set cpuLimit=128 --set memoryLimit=512Gi
+
+helm upgrade --install ingext-lake ingext-lake -n "$NAMESPACE" --set k8sProvider="gcp"
+
+
 log "Install cert-manager"
 helm repo add jetstack https://charts.jetstack.io >/dev/null
 helm repo update >/dev/null
@@ -377,23 +422,11 @@ if ! gcloud compute addresses describe "$STATIC_IP_NAME" --global --project="$PR
   gcloud compute addresses create "$STATIC_IP_NAME" --global --project="$PROJECT_ID"
 fi
 
-log "Create BackendConfig for API service health checks"
-cat <<EOF | kubectl apply -f -
-apiVersion: cloud.google.com/v1
-kind: BackendConfig
-metadata:
-  name: apibackendconfig
-  namespace: $NAMESPACE
-spec:
-  healthCheck:
-    checkIntervalSec: 10
-    timeoutSec: 5
-    healthyThreshold: 2
-    unhealthyThreshold: 3
-    type: HTTP
-    port: 8002
-    requestPath: /api
-EOF
+
+gcloud container clusters update $CLUSTER_NAME \
+    --update-addons=HttpLoadBalancing=ENABLED \
+    --region $REGION
+
 
 log "Wait for API service to exist before annotating"
 for i in {1..12}; do
