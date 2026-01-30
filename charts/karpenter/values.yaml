@@ -1,0 +1,102 @@
+nameOverride: "" # Override the default name, empty means no override
+fullnameOverride: "" # Override the full name, empty means no override
+
+# -- Global log level, defaults to 'info'
+logLevel: info
+# -- Log outputPaths - defaults to stdout only
+logOutputPaths:
+  - stdout
+# -- Log errorOutputPaths - defaults to stderr only
+logErrorOutputPaths:
+  - stderr
+
+# -- Additional annotations to add into metadata.
+additionalAnnotations: {} # Empty dictionary for extra annotations
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Automatically mount a ServiceAccount's API credentials?
+  automount: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+imagePullSecrets: []
+#  - name: my-registry-secret
+
+podDisruptionBudget:
+  minAvailable: 1
+
+controller:
+  replicaCount: 2
+  revisionHistoryLimit: 10
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 1
+  image:
+    repository: "public.ecr.aws/cloudpilotai/gcp/karpenter"
+    tag: "v0.0.1"
+    pullPolicy: IfNotPresent
+  priorityClassName: gmp-critical
+  terminationGracePeriodSeconds: 30
+  env: []
+  resources:
+    requests:
+      cpu: 500m
+      memory: 500Mi
+  metrics:
+    port: 8080
+  healthProbe:
+    port: 8081
+  featureGates:
+    # Enable this will enable spot replacement consolidation for both single and multi-node consolidation.
+    spotToSpotConsolidation: true
+    # -- nodeOverlay is ALPHA and is disabled by default.
+    # Setting this will allow the use of node overlay to impact scheduling decisions
+    nodeOverlay: false
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: karpenter
+          topologyKey: kubernetes.io/hostname
+  tolerations: []
+  settings:
+    # -- The GCP project ID.
+    projectID: ""
+    # -- The GCP region for instance type discovery (e.g., us-central1)
+    clusterLocation: ""
+    # -- The exact GCP cluster location for GKE API calls (e.g., us-central1-a for zonal, us-central1 for regional).
+    # If not set, defaults to 'clusterLocation' for backward compatibility.
+    nodeLocation: ""
+    # -- The GCP cluster name.
+    clusterName: ""
+    # -- The VM memory overhead as a percent that will be subtracted from the total memory for all instance types. The value of `0.075` equals to 7.5%.
+    vmMemoryOverheadPercent: 0.065
+    # -- The maximum length of a batch window. The longer this is, the more pods we can consider for provisioning at one
+    # time which usually results in fewer but larger nodes.
+    batchMaxDuration: 10s
+    # -- The maximum amount of time with no new ending pods that if exceeded ends the current batching window. If pods arrive
+    # faster than this time, the batching window will be extended up to the maxDuration. If they arrive slower, the pods
+    # will be batched separately.
+    batchIdleDuration: 1s
+
+# -- GCP credentials configuration
+credentials:
+  # -- Enable or disable the use of GCP credentials secret
+  # Set to true if you want to use a Kubernetes secret for GCP authentication
+  # Set to false to rely on other authentication methods (e.g., Workload Identity, instance metadata)
+  enabled: true
+  # -- Name of the existing secret containing GCP credentials
+  # If not specified, defaults to "<release-name>-gcp-credentials"
+  # This secret should contain a service account key file
+  secretName: ""
+  # -- Key within the secret that contains the service account JSON
+  secretKey: "key.json"
