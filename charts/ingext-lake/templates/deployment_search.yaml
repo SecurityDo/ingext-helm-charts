@@ -16,7 +16,8 @@ spec:
     metadata:
       annotations:
         {{- if eq .Values.k8sProvider "gcp" }}
-        "gke-gcsfuse.csi.storage.gke.io/mount-volumes": "true"
+        "gke-gcsfuse/volumes": "true"
+        "gke-gcsfuse/ephemeral-storage-request": "2Gi"
         {{- end }}
       labels:
         "ingext.io/app": "search-service"

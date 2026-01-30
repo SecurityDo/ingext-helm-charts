@@ -52,7 +52,8 @@ spec:
         {{- end }}
       annotations:
         {{- if eq .Values.k8sProvider "gcp" }}
-        "gke-gcsfuse.csi.storage.gke.io/mount-volumes": "true"
+        "gke-gcsfuse/volumes": "true"
+        "gke-gcsfuse/ephemeral-storage-request": "2Gi"
         {{- end }}
         ##
         ## This gets referenced in the etcd container's configuration as part of
