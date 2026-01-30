@@ -449,3 +449,6 @@ log "✅ GKE Installation Complete!"
 log "========================================================"
 echo "Next step: Configure your DNS A-record to the static IP."
 kubectl get ingress -n "$NAMESPACE"
+
+# set config for ingext cli
+ingext config set --cluster "$CLUSTER_NAME" --context "gke_${PROJECT_ID}_${REGION}_${CLUSTER_NAME}" --provider gcp --namespace $NAMESPACE
