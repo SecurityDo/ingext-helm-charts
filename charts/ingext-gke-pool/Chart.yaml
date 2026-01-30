@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ingext-gke-pool
+description: Helm chart for Karpenter NodePool and GCENodeClass (GKE)
+type: application
+version: 1.0.0
+appVersion: "0.1.0"

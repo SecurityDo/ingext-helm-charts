@@ -1,0 +1,47 @@
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: {{ .Values.poolName }}
+spec:
+  limits:
+    cpu: "{{ .Values.cpuLimit }}"
+    memory: "{{ .Values.memoryLimit }}"
+  template:
+    metadata:
+      labels:
+        node-pool: {{ .Values.poolName }}
+        {{- with .Values.nodeLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.gcp
+        kind: GCENodeClass
+        name: {{ .Values.poolName }}
+      requirements:
+        - key: "karpenter.sh/capacity-type"
+          operator: In
+          values: {{ .Values.capacityType | toJson }}
+        - key: "karpenter.k8s.gcp/instance-family"
+          operator: In
+          values: {{ .Values.instanceFamily | toJson }}
+        {{- if .Values.instanceCpu }}
+        - key: "karpenter.k8s.gcp/instance-cpu"
+          operator: In
+          values: {{ .Values.instanceCpu | toJson }}
+        {{- end }}
+        - key: "kubernetes.io/arch"
+          operator: In
+          values: ["amd64"]
+        {{- if .Values.zones }}
+        - key: "topology.kubernetes.io/zone"
+          operator: In
+          values: {{ .Values.zones | toJson }}
+        {{- end }}
+      taints:
+        - key: node-pool
+          value: {{ .Values.poolName }}
+          effect: NoSchedule
+  disruption:
+    consolidationPolicy: {{ .Values.consolidationPolicy }}
+    consolidateAfter: {{ .Values.consolidateAfter }}

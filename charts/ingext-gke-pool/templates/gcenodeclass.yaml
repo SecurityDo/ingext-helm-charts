@@ -1,0 +1,22 @@
+apiVersion: karpenter.k8s.gcp/v1alpha1
+kind: GCENodeClass
+metadata:
+  name: {{ .Values.poolName }}
+spec:
+  {{- if .Values.serviceAccount }}
+  serviceAccount: {{ .Values.serviceAccount }}
+  {{- end }}
+  imageSelectorTerms:
+    {{- toYaml .Values.imageSelectorTerms | nindent 4 }}
+  {{- if .Values.instanceLabels }}
+  labels:
+    {{- toYaml .Values.instanceLabels | nindent 4 }}
+  {{- end }}
+  {{- if .Values.networkTags }}
+  networkTags:
+    {{- toYaml .Values.networkTags | nindent 4 }}
+  {{- end }}
+  disks:
+    {{- toYaml .Values.disks | nindent 4 }}
+  kubeletConfiguration:
+    maxPods: {{ .Values.kubeletConfig.maxPods }}

@@ -1,0 +1,63 @@
+# Required
+clusterName:
+poolName:
+
+# Optional - GCP Service Account for nodes
+# serviceAccount:
+
+# Resource limits
+cpuLimit: 8
+memoryLimit: 64Gi
+
+# Disruption policy
+consolidationPolicy: WhenEmptyOrUnderutilized
+consolidateAfter: 20s
+
+# Image Configuration (GCE images)
+imageSelectorTerms:
+  - alias: "ContainerOptimizedOS@latest"
+
+# Instance Configuration
+instanceCpu:
+  - "2"
+  - "4"
+
+instanceFamily:
+  - "n2-standard"
+  - "n2-highmem"
+  - "n2d-standard"
+  - "n2d-highmem"
+  - "c3-standard"
+  - "c3-highmem"
+
+capacityType:
+  - "spot"
+  - "on-demand"
+
+# GCP Zones (optional - if not set, uses all available zones in region)
+# zones:
+#   - "us-east1-b"
+#   - "us-east1-c"
+#   - "us-east1-d"
+
+# Network tags for firewall rules (optional)
+# networkTags:
+#   - "karpenter-default"
+
+# GCE instance labels (visible in GCP Console, for billing/organization)
+instanceLabels:
+  env: dev
+
+# Kubernetes node labels (for pod scheduling, nodeSelector, affinity)
+nodeLabels:
+  # node-pool label is automatically added
+
+# Disk configuration
+disks:
+  - category: pd-balanced
+    sizeGiB: 40
+    boot: true
+
+# Kubelet configuration
+kubeletConfig:
+  maxPods: 50

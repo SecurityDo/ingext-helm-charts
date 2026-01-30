@@ -1,0 +1,36 @@
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: gcs-lake
+spec:
+  capacity:
+    storage: {{ .Values.storage }} # Ignored, required
+  accessModes:
+    - ReadWriteMany # Supported options: ReadWriteMany / ReadOnlyMany
+  storageClassName: "gcs-storage-class" # Required for static provisioning
+  claimRef: # To ensure no other PVCs can claim this PV
+    namespace: {{ .Release.Namespace }} # Namespace is required even though it's in "default" namespace.
+    name: cloud-storage-{{ .Release.Namespace }}
+  mountOptions:
+    - implicit-dirs
+    - "metadata-cache:negative-ttl-secs:0"
+  csi:
+    driver: gcsfuse.csi.storage.gke.io # Required
+    volumeHandle: {{ .Values.bucket.name }}
+    volumeAttributes:
+      bucketName: {{ .Values.bucket.name }}
+      #authenticationSource: "pod"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cloud-storage-{{ .Release.Namespace }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  accessModes: {{- .Values.accessModes | toYaml | nindent 4 }}
+  storageClassName: "gcs-storage-class" # Required for static provisioning
+  resources:
+    requests:
+      storage: {{ .Values.storage }} # Ignored, required
+  volumeName: gcs-lake # Name of your PV
