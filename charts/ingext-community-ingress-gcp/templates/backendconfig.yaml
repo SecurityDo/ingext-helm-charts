@@ -5,6 +5,7 @@ metadata:
   name: api-backend-config
   namespace: {{ .Release.Namespace }}
 spec:
+  timeoutSec: 300  
   healthCheck:
     checkIntervalSec: 10
     timeoutSec: 5
@@ -20,6 +21,7 @@ metadata:
   name: platform-backend-config
   namespace: {{ .Release.Namespace }}
 spec:
+  timeoutSec: 300
   healthCheck:
     checkIntervalSec: 10
     timeoutSec: 5
