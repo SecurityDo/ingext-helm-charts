@@ -389,7 +389,8 @@ helm upgrade --install karpenter karpenter \
   --set "controller.settings.projectID=${PROJECT_ID}" \
   --set "controller.settings.clusterLocation=${REGION}" \
   --set "controller.settings.clusterName=${CLUSTER_NAME}" \
-  --set "credentials.enabled=false" --set serviceAccount.annotations.'iam\.gke\.io/gcp-service-account'="${KARPENTER_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+  --set "credentials.enabled=false" \
+  --set serviceAccount.annotations.'iam\.gke\.io/gcp-service-account'="${KARPENTER_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 
 cd ../ingext-gke-helper
 

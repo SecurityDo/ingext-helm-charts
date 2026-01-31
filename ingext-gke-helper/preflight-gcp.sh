@@ -347,6 +347,11 @@ prompt NAMESPACE "Kubernetes namespace" "ingext" "true"
 prompt SITE_DOMAIN "Public domain for Ingext (example: ingext.example.com)" ""
 prompt CERT_EMAIL "Email for certificate issuer" ""
 
+prompt GCS_BUCKET "Google Cloud Storage Bucket" "ingext-$CLUSTER_NAME"
+prompt GSA_NAME "Google Service Account" "$NAMESPACE-gsa"
+prompt SA_NAME "Kubenete Service Account" "$NAMESPACE-sa"
+
+
 echo ""
 echo "You will need DNS control for: $SITE_DOMAIN"
 echo "You will create an A record to the Google Cloud Load Balancer IP after ingress is created."
@@ -509,6 +514,9 @@ export NODE_COUNT="$(printf '%s' "$NODE_COUNT")"
 export MACHINE_TYPE="$(printf '%s' "$MACHINE_TYPE")"
 export DISK_SIZE="$(printf '%s' "$DISK_SIZE")"
 export NAMESPACE="$(printf '%s' "$NAMESPACE")"
+export GCS_BUCKET="$(printf '%s' "$GCS_BUCKET")"
+export GSA_NAME="$(printf '%s' "$GSA_NAME")"
+export SA_NAME="$(printf '%s' "$SA_NAME")"
 export SITE_DOMAIN="$(printf '%s' "$SITE_DOMAIN")"
 export CERT_EMAIL="$(printf '%s' "$CERT_EMAIL")"
 

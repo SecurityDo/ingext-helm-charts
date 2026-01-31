@@ -213,6 +213,7 @@ if kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
   
   # List of releases to uninstall (in reverse order of installation)
   RELEASES=(
+    "ingext-lake"
     "ingext-community-ingress-gcp"
     "ingext-community-certissuer"
     "ingext-community"
