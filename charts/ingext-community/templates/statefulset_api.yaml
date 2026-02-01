@@ -122,7 +122,7 @@ spec:
       ## storageClassName: "manual"
       resources:
         requests:
-          storage: 10Gi
+          storage: 5Gi
   persistentVolumeClaimRetentionPolicy: 
     whenDeleted: Retain
     whenScaled: Retain  

@@ -4,7 +4,7 @@ metadata:
   name: fluency8
   namespace: {{ .Release.Namespace }}
   annotations:
-    cloud.google.com/backend-config: '{"default": "fluency-backend-config"}'
+    cloud.google.com/backend-config: '{"ports": {"8004": "fluency-backend-config"}}'
     cloud.google.com/neg: '{"ingress": true}'
 spec:
   type: ClusterIP

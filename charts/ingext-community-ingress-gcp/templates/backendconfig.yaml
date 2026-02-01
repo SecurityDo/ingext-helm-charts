@@ -1,4 +1,5 @@
 {{- if .Values.ingress.createBackendConfig }}
+---
 apiVersion: cloud.google.com/v1
 kind: BackendConfig
 metadata:

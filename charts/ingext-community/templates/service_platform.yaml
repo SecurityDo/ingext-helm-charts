@@ -4,7 +4,7 @@ metadata:
   name: platform-service
   namespace: {{ .Release.Namespace }}
   annotations:
-    cloud.google.com/backend-config: '{"default": "platform-backend-config"}'
+    cloud.google.com/backend-config: '{"ports": {"28180": "platform-backend-config"}}'
     cloud.google.com/neg: '{"ingress": true}'
 spec:
   type: ClusterIP
