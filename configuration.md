@@ -39,6 +39,19 @@ ingext stream connect-sink --router-id $routerID --sink-id $sinkID
 ingext stream connect-router --router-id $routerID --source-id $srcID
 ```
 
+OR install the full pipeline with application template
+
+```bash
+ingext application install \
+  --app HecPassthrough \
+  --instance hecTest
+
+ingext application get-instance \
+  --app=HecPassthrough \
+  --instance=hecTest
+# output the URL and Token for the HEC endpoint
+```
+
 ## Add Office365 Audit event source
 
 ### setup Microsoft Azure application with permissions
