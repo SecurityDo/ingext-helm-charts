@@ -288,6 +288,7 @@ log "Configuring Workload Identity for '$SA_NAME'..."
 # Create Google Service Account (GSA) if it doesn't exist
 if ! gcloud iam service-accounts describe "$GSA_NAME@$PROJECT_ID.iam.gserviceaccount.com" &>/dev/null; then
     gcloud iam service-accounts create "$GSA_NAME" --display-name="Ingext App Service Account"
+    sleep 10
 fi
 
 # Assign GCS Permissions to the GSA
@@ -396,13 +397,13 @@ cd ../ingext-gke-helper
 
 
 # Node Pools via Karpenter
-helm upgrade --install ingext-merge-pool ingext-gke-pool \
+helm upgrade --install ingext-merge-pool oci://public.ecr.aws/ingext/ingext-gke-pool \
   --set poolName=pool-merge --set clusterName="$CLUSTER_NAME"
 
-helm upgrade --install ingext-search-pool ingext-gke-pool \
+helm upgrade --install ingext-search-pool oci://public.ecr.aws/ingext/ingext-gke-pool \
   --set poolName=pool-search --set clusterName="$CLUSTER_NAME" --set cpuLimit=128 --set memoryLimit=512Gi
 
-helm upgrade --install ingext-lake ingext-lake -n "$NAMESPACE" --set k8sProvider="gcp"
+helm upgrade --install ingext-lake oci://public.ecr.aws/ingext/ingext-lake -n "$NAMESPACE" --set k8sProvider="gcp"
 
 
 log "Install cert-manager"
@@ -429,20 +430,10 @@ gcloud container clusters update $CLUSTER_NAME \
     --region $REGION
 
 
-log "Wait for API service to exist before annotating"
-for i in {1..12}; do
-  if kubectl get service api -n "$NAMESPACE" >/dev/null 2>&1; then
-    kubectl annotate service api -n "$NAMESPACE" \
-      cloud.google.com/backend-config='{"default": "apibackendconfig"}' \
-      --overwrite 2>/dev/null && break
-  fi
-  sleep 5
-done
-
 log "Install GCP ingress (siteDomain=$SITE_DOMAIN)"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CHART_DIR="$SCRIPT_DIR/../charts/ingext-community-ingress-gcp"
-helm upgrade --install ingext-ingress "$CHART_DIR" \
+#SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+#CHART_DIR="$SCRIPT_DIR/../charts/ingext-community-ingress-gcp"
+helm upgrade --install ingext-ingress oci://public.ecr.aws/ingext/ingext-community-ingress-gcp \
   -n "$NAMESPACE" --set "siteDomain=$SITE_DOMAIN" --set "ingress.staticIpName=$STATIC_IP_NAME"
 
 log "========================================================"

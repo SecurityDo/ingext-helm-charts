@@ -342,7 +342,7 @@ fi
 read -rp "Machine type [$DEFAULT_MACHINE_TYPE]: " MACHINE_TYPE_INPUT
 MACHINE_TYPE="${MACHINE_TYPE_INPUT:-$DEFAULT_MACHINE_TYPE}"
 
-prompt DISK_SIZE "Boot disk size in GB per node (default: 20, GKE default is 100)" "20"
+prompt DISK_SIZE "Boot disk size in GB per node (default: 40, GKE default is 100)" "40"
 prompt NAMESPACE "Kubernetes namespace" "ingext" "true"
 prompt SITE_DOMAIN "Public domain for Ingext (example: ingext.example.com)" ""
 prompt CERT_EMAIL "Email for certificate issuer" ""
