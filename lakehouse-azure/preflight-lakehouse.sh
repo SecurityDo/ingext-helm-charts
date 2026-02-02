@@ -167,8 +167,8 @@ read -rp "Select node size 1-4 [default 2]: " SIZE_CHOICE
 SIZE_CHOICE="${SIZE_CHOICE:-2}"
 
 case "$SIZE_CHOICE" in
-  1) NODE_VM_SIZE="$SMALL_SKU";  NODE_COUNT_DEFAULT="2" ;;
-  2) NODE_VM_SIZE="$MEDIUM_SKU"; NODE_COUNT_DEFAULT="3" ;;
+  1) NODE_VM_SIZE="$SMALL_SKU";  NODE_COUNT_DEFAULT="1" ;;
+  2) NODE_VM_SIZE="$MEDIUM_SKU"; NODE_COUNT_DEFAULT="2" ;;
   3) NODE_VM_SIZE="$LARGE_SKU";  NODE_COUNT_DEFAULT="3" ;;
   4)
      read -rp "Enter AKS Node VM Size (e.g. Standard_D2s_v4): " NODE_VM_SIZE
