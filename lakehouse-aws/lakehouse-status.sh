@@ -101,8 +101,8 @@ check_pod_status() {
 # 3. Component Status
 echo ""
 echo "[Core Services]"
-check_pod_status "redis" "Redis (Cache)"
-check_pod_status "opensearch" "OpenSearch (Search Index)"
+#check_pod_status "redis" "Redis (Cache)"
+#check_pod_status "opensearch" "OpenSearch (Search Index)"
 check_pod_status "victoria-metrics-single" "VictoriaMetrics (TSDB)"
 check_pod_status "etcd" "etcd (Key-Value Store)"
 
