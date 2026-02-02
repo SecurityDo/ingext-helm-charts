@@ -27,13 +27,4 @@ spec:
           /scripts/rbac_upgrade.sh {{ .Values.account }}
           mkdir /etc/schemas
           cp /scripts/schemas/*.json /etc/schemas/
-          /scripts/ingext_cli esv7 create ingext_audit /etc/schemas/schema_audit_v7.json
-          /scripts/ingext_cli esv7 create platform_processor /etc/schemas/platform_processor_v7.json
-          /scripts/ingext_cli esv7 create globalasset /etc/schemas/schema_globalasset.json
-          /scripts/ingext_cli esv7 create metric_incident /etc/schemas/metric_incident_mapping_v7.json
-          /scripts/ingext_cli esv7 create metric_alert /etc/schemas/metric_alert_mapping_v7.json
-          /scripts/ingext_cli esv7 create metric_data /etc/schemas/metric_data_mapping_v7.json
-          /scripts/ingext_cli esv7 create eventwatch /etc/schemas/eventwatch_v7.json
-          /scripts/ingext_cli esv7 create behavior /etc/schemas/behavior_mapping_v7.json
-          /scripts/ingext_cli esv7 create behavior_summary  /etc/schemas/behavior_summary_mapping_v7.json
       restartPolicy: Never

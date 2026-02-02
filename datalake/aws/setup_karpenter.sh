@@ -222,10 +222,11 @@ helm upgrade --install karpenter oci://public.ecr.aws/karpenter/karpenter \
   --create-namespace \
   --set settings.clusterName="$CLUSTER_NAME" \
   --set settings.interruptionQueue="" \
-  --set controller.resources.requests.cpu=1 \
-  --set controller.resources.requests.memory=1Gi \
-  --set controller.resources.limits.cpu=1 \
-  --set controller.resources.limits.memory=1Gi \
+  --set controller.resources.requests.cpu=200m \
+  --set controller.resources.requests.memory=256Mi \
+  --set controller.resources.limits.cpu=300m \
+  --set controller.resources.limits.memory=500Mi \
+  --set replicas=1 \
   --wait
 
 echo "========================================================"
