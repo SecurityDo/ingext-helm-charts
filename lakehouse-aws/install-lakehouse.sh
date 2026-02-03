@@ -194,6 +194,9 @@ wait_ns_pods_ready "$NAMESPACE" "600s"
 
 # -------- 7. Phase 5: Application (Stream) --------
 log "Phase 5: Application - Installing Ingext Stream..."
+
+helm upgrade --install ingext-manager-role oci://public.ecr.aws/ingext/ingext-manager-role -n "$NAMESPACE"
+
 helm upgrade --install ingext-community-config oci://public.ecr.aws/ingext/ingext-community-config \
   -n "$NAMESPACE" --set "siteDomain=$SITE_DOMAIN"
 
@@ -214,7 +217,6 @@ helm upgrade --install ingext-merge-pool oci://public.ecr.aws/ingext/ingext-eks-
 helm upgrade --install ingext-search-pool oci://public.ecr.aws/ingext/ingext-eks-pool \
   --set poolName=pool-search --set clusterName="$CLUSTER_NAME" --set cpuLimit=128 --set memoryLimit=512Gi
 
-helm upgrade --install ingext-manager-role oci://public.ecr.aws/ingext/ingext-manager-role -n "$NAMESPACE"
 helm upgrade --install ingext-s3-lake oci://public.ecr.aws/ingext/ingext-s3-lake -n "$NAMESPACE" \
   --set bucket.name="$S3_BUCKET" --set bucket.region="$AWS_REGION"
 

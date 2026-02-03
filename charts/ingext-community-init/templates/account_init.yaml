@@ -6,7 +6,7 @@ metadata:
 spec:
   parallelism: 1    
   completions: 1
-  ttlSecondsAfterFinished: 3600    
+  ttlSecondsAfterFinished: 30    
   template:         
     metadata:
       name: ingext-community-init
