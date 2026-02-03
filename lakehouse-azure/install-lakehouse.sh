@@ -269,6 +269,9 @@ sleep 60
 
 # 12. Install the Ingext Stream
 echo "Installing Ingext Stream..."
+
+helm install ingext-manager-role oci://public.ecr.aws/ingext/ingext-manager-role -n "$NAMESPACE"
+
 helm install ingext-community-config oci://public.ecr.aws/ingext/ingext-community-config \
   -n "$NAMESPACE" \
   --set siteDomain="$SITE_DOMAIN" \
@@ -321,7 +324,7 @@ helm upgrade --install ingext-search-pool oci://public.ecr.aws/ingext/ingext-aks
   --set memoryLimit=512Gi
 
 # 15. Install the Ingest Manager Role and the shared storage
-helm install ingext-manager-role oci://public.ecr.aws/ingext/ingext-manager-role -n "$NAMESPACE"
+#helm install ingext-manager-role oci://public.ecr.aws/ingext/ingext-manager-role -n "$NAMESPACE"
 
 helm install ingext-blob-lake oci://public.ecr.aws/ingext/ingext-blob-lake \
   -n "$NAMESPACE" \
