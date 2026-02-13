@@ -1,0 +1,12 @@
+# Force Unix line endings for all shell scripts and env files
+*.sh text eol=lf
+*.env text eol=lf
+
+# Helm chart files
+*.yaml text eol=lf
+*.yml text eol=lf
+*.tpl text eol=lf
+
+# Markdown and config
+*.md text eol=lf
+*.json text eol=lf

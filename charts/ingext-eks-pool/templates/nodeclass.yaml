@@ -23,3 +23,5 @@ spec:
     httpEndpoint: enabled
   tags:
     "ingext.io/app": {{ .Values.poolName }}
+    "ingext.io/pool": {{ .Values.poolName }}
+    "ingext.io/cluster": {{ .Values.clusterName }}
